@@ -1,0 +1,14 @@
+# editors
+*.swp
+*~
+*.txt
+*.csv
+*.log
+*.ipynb
+*.vscode
+*.py
+.DS_Store
+*.rst
+
+# build
+/build*/
