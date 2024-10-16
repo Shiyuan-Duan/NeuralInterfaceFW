@@ -205,7 +205,7 @@ static int _ads1299_read_data(const struct device *dev, uint8_t *read_buffer, ui
         return err;
     }
 
-    printk("Reading data!\n");
+    // printk("Reading data!\n");
     return 0;
 }
 // static int _ads1299_read_data(const struct device *dev, uint8_t *read_buffer, uint8_t read_size)
@@ -275,7 +275,7 @@ static int turn_on_electrodes(const struct device *dev)
     int err = 0;
     for(int i = 0; i < 8; i++)
     {   
-        uint8_t reg = 0x05 + 1;
+        uint8_t reg = 0x05 + i;
         uint8_t data = 0x00;
         err = ads1299_write_register(dev, reg, 0x00);
         if (err < 0) {
@@ -296,7 +296,7 @@ static int turn_on_electrodes(const struct device *dev)
 static void drdy_interrupt_callback(const struct device *port, struct gpio_callback *cb, uint32_t pins)
 {
     struct ads1299_data *data = CONTAINER_OF(cb, struct ads1299_data, drdy_cb);
-    printk("DRDY interrupt triggered\n");
+    // printk("DRDY interrupt triggered\n");
     k_sem_give(&data->drdy_sem); // Release the semaphore
 }
 
@@ -410,11 +410,26 @@ static int init_ads1299(const struct device *dev)
     printk("ADS1299 driver initialized successfully\n");
 
 
+    // Reset device
+    err = _ads1299_reset(dev);
+
     uint8_t config3 = 0x00;
     err = ads1299_read_reg(dev, 0x03, &config3, 1);
     config3 |= BIT(7); // Set BIT7 to enable internal reference
     err = ads1299_write_register(dev, 0x03, config3);
     turn_on_electrodes(dev);
+
+
+
+    // Enable SRB1 reference
+    uint8_t misc1_reg = 0x15;
+    uint8_t misc1_data = 0x00 | BIT(5);
+    err = ads1299_write_register(dev, misc1_reg, misc1_data);
+    if (err < 0) {
+        printk("Error writing register\n");
+        return err;
+    }
+
 
 
     /* Send RDATAC command to start continuous data mode */
@@ -431,10 +446,6 @@ static int init_ads1299(const struct device *dev)
         printk("Error setting START pin high\n");
         return err;
     }
-
-    
-
-
 
     printk("ADS1299 started data conversions\n");
     return 0;
