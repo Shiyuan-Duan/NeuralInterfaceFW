@@ -8,11 +8,18 @@ enum SensorType {
 	CHANNEL1,
 	CHANNEL2,
 	CHANNEL3,
+	CHANNEL4,
+	CHANNEL5,
+	CHANNEL6,
+	CHANNEL7,
+	CHANNEL8,
 	HR,
 	SPO2,
 	TEMP,
 	GLUCOSE
 };
+
+
 
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
@@ -90,13 +97,21 @@ enum SensorType {
 #define BT_UUID_SENSOR_STREAM_SW				BT_UUID_DECLARE_128(BT_UUID_SENSOR_STREAM_SW_VAL)
 
 typedef int (*sensor_switch_cb_t) (uint8_t value);
+typedef int (*sensor_data_download_cb_t) (uint8_t value);
+
 
 struct ble_cb  {
-	bool is_streaming;
 	sensor_switch_cb_t sensor_switch_cb;
+	sensor_data_download_cb_t sensor_data_download_cb;
+};
+struct sensor_state{
+	bool is_streaming;
+	bool is_empty;
+	int data_size;
 };
 
 int init_ble_service(struct ble_cb *callbacks);
+int register_ble_cb(struct ble_cb *callbacks);
 int stream_sensor_data(enum SensorType sensor_type, uint32_t *sensor_value, ssize_t size);
 
 

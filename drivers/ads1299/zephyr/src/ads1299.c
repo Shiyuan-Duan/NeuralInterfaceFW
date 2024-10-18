@@ -57,11 +57,11 @@ static int ads1299_write_register(const struct device *dev, uint8_t reg, uint8_t
     tx_buf[1] = 0x00;
     tx_buf[2] = data;
 
-    struct spi_buf tx_spi_buf = {.buf = (void*)&tx_buf, .len = sizeof(tx_buf)};
+    struct spi_buf tx_spi_buf = {.buf = tx_buf, .len = sizeof(tx_buf)};
     struct spi_buf_set tx_spi_buf_set = {.buffers = &tx_spi_buf, .count = 1};
     err = spi_write_dt(&cfg->spi, &tx_spi_buf_set);
     if (err < 0) {
-        printk("spi_write_dt() failed, err %d", err);
+        LOG_ERR("spi_write_dt() failed, err %d", err);
         return err;
     }
 
@@ -77,11 +77,11 @@ static int ads1299_send_command(const struct device *dev, uint8_t command)
 
     tx_buf[0] = command;
 
-    struct spi_buf tx_spi_buf = {.buf = (void*)&tx_buf, .len = sizeof(tx_buf)};
+    struct spi_buf tx_spi_buf = {.buf = tx_buf, .len = sizeof(tx_buf)};
     struct spi_buf_set tx_spi_buf_set = {.buffers = &tx_spi_buf, .count = 1};
     err = spi_write_dt(&cfg->spi, &tx_spi_buf_set);
     if (err < 0) {
-        printk("spi_write_dt() failed, err %d", err);
+        LOG_ERR("spi_write_dt() failed, err %d", err);
         return err;
     }
 
@@ -114,7 +114,7 @@ static int ads1299_read_reg(const struct device *dev, uint8_t reg, uint8_t *data
 
     err = spi_transceive_dt(&cfg->spi, &tx_spi_buf_set, &rx_spi_buf_set);
     if (err < 0) {
-        printk("spi_transceive_dt() failed, err: %d\n", err);
+        LOG_ERR("spi_transceive_dt() failed, err: %d\n", err);
         return err;
     }
 
@@ -128,22 +128,27 @@ static int ads1299_read_reg(const struct device *dev, uint8_t reg, uint8_t *data
 static int _ads1299_check_id(const struct device *dev, uint8_t *chip_id)
 {
     int err;
-    err = ads1299_read_reg(dev, 0x00, chip_id, 1);
+    err = ads1299_read_reg(dev, 0x01, chip_id, 1);
     if (err < 0) {
-        printk("Error reading chip ID\n");
+        LOG_ERR("Error reading chip ID\n");
         return err;
     }
+    LOG_INF("Chip ID: 0x%02x\n", *chip_id);
     return 0;
 }
 
 static int _ads1299_reset(const struct device *dev)
 {
+    k_msleep(100); // Small delay to ensure command is processed
     int err;
+    const struct ads1299_config *cfg = dev->config;
+    err = gpio_pin_configure_dt(&cfg->reset, GPIO_OUTPUT_INACTIVE);
     err = ads1299_send_command(dev, 0x06);
     if (err < 0) {
-        printk("Error sending RESET command\n");
+        LOG_ERR("Error sending RESET command\n");
         return err;
     }
+    k_msleep(100); // Small delay to ensure command is processedf
     return 0;
 }
 
@@ -152,7 +157,7 @@ static int _ads1299_start(const struct device *dev)
     int err;
     err = ads1299_send_command(dev, 0x08);
     if (err < 0) {
-        printk("Error sending START command\n");
+        LOG_ERR("Error sending START command\n");
         return err;
     }
     return 0;
@@ -163,7 +168,7 @@ static int _ads1299_stop(const struct device *dev)
     int err;
     err = ads1299_send_command(dev, 0x0A);
     if (err < 0) {
-        printk("Error sending STOP command\n");
+        LOG_ERR("Error sending STOP command\n");
         return err;
     }
     return 0;
@@ -201,7 +206,7 @@ static int _ads1299_read_data(const struct device *dev, uint8_t *read_buffer, ui
     /* Perform SPI transaction to read data */
     err = spi_transceive_dt(&cfg->spi, &tx_spi, &rx_spi);
     if (err < 0) {
-        printk("spi_transceive_dt() failed, err: %d\n", err);
+        LOG_ERR("spi_transceive_dt() failed, err: %d\n", err);
         return err;
     }
 
@@ -251,7 +256,7 @@ static int _ads1299_wakeup(const struct device *dev)
     int err;
     err = ads1299_send_command(dev, 0x02);
     if (err < 0) {
-        printk("Error sending WAKEUP command\n");
+        LOG_ERR("Error sending WAKEUP command\n");
         return err;
     }
     return 0;
@@ -262,7 +267,7 @@ static int _ads1299_standby(const struct device *dev)
     int err;
     err = ads1299_send_command(dev, 0x04);
     if (err < 0) {
-        printk("Error sending STANDBY command\n");
+        LOG_ERR("Error sending STANDBY command\n");
         return err;
     }
     return 0;
@@ -277,15 +282,21 @@ static int turn_on_electrodes(const struct device *dev)
     {   
         uint8_t reg = 0x05 + i;
         uint8_t data = 0x00;
-        err = ads1299_write_register(dev, reg, 0x00);
-        if (err < 0) {
-            printk("Error writing register\n");
-            return err;
-        }
-        printk("Sending 0x00 to register %d\n", reg);
 
         err = ads1299_read_reg(dev, reg, &data, 1);
-        printk("Data read from register %d: 0x%02x\n", reg, data);
+        LOG_ERR("Data first read from register 0x%02x: 0x%02x\n", reg, data);
+
+        data &= ~0x07; // Clear bits [0:2]
+        err = ads1299_write_register(dev, reg, data);
+        if (err < 0) {
+            LOG_ERR("Error writing register\n");
+            return err;
+        }
+
+
+        err = ads1299_read_reg(dev, reg, &data, 1);
+        LOG_ERR("Data after read from register 0x%02x: 0x%02x\n", reg, data);
+
 
     }
     return 0;
@@ -300,6 +311,21 @@ static void drdy_interrupt_callback(const struct device *port, struct gpio_callb
     k_sem_give(&data->drdy_sem); // Release the semaphore
 }
 
+static int config_sample_rate(const struct device *dev)
+{
+    int err;
+    uint8_t data = 0x00;
+    err = ads1299_read_reg(dev, 0x01, &data, 1);
+    data &= ~0x07; // Clear bits [2:0]
+    data |= 0x05;  // Set bits [2:0] to 101                                                                  
+    err = ads1299_write_register(dev, 0x01, data);
+    if (err < 0) {
+        LOG_ERR("Error writing register\n");
+        return err;
+    }
+    return 0;
+}
+
 static int init_gpios(const struct device *dev)
 {
     struct ads1299_data *data = dev->data;
@@ -308,31 +334,31 @@ static int init_gpios(const struct device *dev)
 
     /* Ensure all GPIO devices are ready */
     if (!device_is_ready(cfg->drdy.port)) {
-        printk("DRDY GPIO device not ready\n");
+        LOG_ERR("DRDY GPIO device not ready\n");
         return -ENODEV;
     }
     if (!device_is_ready(cfg->pwdn.port)) {
-        printk("PWDN GPIO device not ready\n");
+        LOG_ERR("PWDN GPIO device not ready\n");
         return -ENODEV;
     }
     if (!device_is_ready(cfg->reset.port)) {
-        printk("RESET GPIO device not ready\n");
+        LOG_ERR("RESET GPIO device not ready\n");
         return -ENODEV;
     }
     if (!device_is_ready(cfg->start.port)) {
-        printk("START GPIO device not ready\n");
+        LOG_ERR("START GPIO device not ready\n");
         return -ENODEV;
     }
 
     /* Configure DRDY pin as input with pull-up and interrupt on falling edge */
     err = gpio_pin_configure_dt(&cfg->drdy, GPIO_INPUT | GPIO_PULL_UP);
     if (err < 0) {
-        printk("Error configuring DRDY pin\n");
+        LOG_ERR("Error configuring DRDY pin\n");
         return err;
     }
     err = gpio_pin_interrupt_configure_dt(&cfg->drdy, GPIO_INT_EDGE_FALLING);
     if (err < 0) {
-        printk("Error configuring DRDY interrupt\n");
+        LOG_ERR("Error configuring DRDY interrupt\n");
         return err;
     }
 
@@ -340,32 +366,32 @@ static int init_gpios(const struct device *dev)
     gpio_init_callback(&data->drdy_cb, drdy_interrupt_callback, BIT(cfg->drdy.pin));
     err = gpio_add_callback(cfg->drdy.port, &data->drdy_cb);
     if (err < 0) {
-        printk("Error adding DRDY callback\n");
+        LOG_ERR("Error adding DRDY callback\n");
         return err;
     }
 
     /* Configure PWDN pin as output and set it inactive (high) */
     err = gpio_pin_configure_dt(&cfg->pwdn, GPIO_OUTPUT_INACTIVE);
     if (err < 0) {
-        printk("Error configuring PWDN pin\n");
+        LOG_ERR("Error configuring PWDN pin\n");
         return err;
     }
 
     /* Configure RESET pin as output and set it inactive (high) */
     err = gpio_pin_configure_dt(&cfg->reset, GPIO_OUTPUT_INACTIVE);
     if (err < 0) {
-        printk("Error configuring RESET pin\n");
+        LOG_ERR("Error configuring RESET pin\n");
         return err;
     }
 
     /* Configure START pin as output and set it inactive (low) initially */
     err = gpio_pin_configure_dt(&cfg->start, GPIO_OUTPUT_INACTIVE);
     if (err < 0) {
-        printk("Error configuring START pin\n");
+        LOG_ERR("Error configuring START pin\n");
         return err;
     }
 
-    printk("GPIOs initialized successfully\n");
+    LOG_INF("GPIOs initialized successfully\n");
     return 0;
 }
 
@@ -378,7 +404,14 @@ static int init_ads1299(const struct device *dev)
     /* Initialize GPIOs */
     err = init_gpios(dev);
     if (err < 0) {
-        printk("Error initializing GPIOs\n");
+        LOG_ERR("Error initializing GPIOs\n");
+        return err;
+    }
+
+    err = _ads1299_reset(dev);
+    if(err < 0)
+    {
+        LOG_ERR("Error resetting device\n");
         return err;
     }
 
@@ -392,7 +425,7 @@ static int init_ads1299(const struct device *dev)
     /* Send SDATAC command to stop continuous data mode */
     err = ads1299_send_command(dev, 0x11); // SDATAC command
     if (err < 0) {
-        printk("Error sending SDATAC command\n");
+        LOG_ERR("Error sending SDATAC command\n");
         return err;
     }
     k_msleep(1); // Small delay to ensure command is processed
@@ -400,19 +433,37 @@ static int init_ads1299(const struct device *dev)
     /* Send WAKEUP command if the device is in standby */
     err = ads1299_send_command(dev, 0x02); // WAKEUP command
     if (err < 0) {
-        printk("Error sending WAKEUP command\n");
+        LOG_ERR("Error sending WAKEUP command\n");
         return err;
     }
     k_msleep(1);
 
     /* Read Device ID to verify communication */
+    uint8_t chip_id = 0x00;
+    err = _ads1299_check_id(dev, &chip_id);
+    if (err < 0) {
+        LOG_ERR("Error checking device ID\n");
+        return err;
+    }
 
-    printk("ADS1299 driver initialized successfully\n");
+
+    LOG_INF("ADS1299 driver initialized successfully\n");
 
 
     // Reset device
-    err = _ads1299_reset(dev);
 
+
+
+
+    // check 0x05 - 0x0C register after reset
+    for (int i = 0x05; i <= 0x0C; i++)
+    {
+        uint8_t data = 0x00;
+        err = ads1299_read_reg(dev, i, &data, 1);
+        LOG_INF("Data read from register 0x%02x: 0x%02x\n", i, data);
+    }
+
+    
     uint8_t config3 = 0x00;
     err = ads1299_read_reg(dev, 0x03, &config3, 1);
     config3 |= BIT(7); // Set BIT7 to enable internal reference
@@ -430,6 +481,8 @@ static int init_ads1299(const struct device *dev)
         return err;
     }
 
+    // Set sample rate
+    err = config_sample_rate(dev);
 
 
     /* Send RDATAC command to start continuous data mode */

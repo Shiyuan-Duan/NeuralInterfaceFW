@@ -38,6 +38,11 @@ static bool sensor_state = false;
 static bool stream_sensor_channel1_enabled;
 static bool stream_sensor_channel2_enabled;
 static bool stream_sensor_channel3_enabled;
+static bool stream_sensor_channel4_enabled;
+static bool stream_sensor_channel5_enabled;
+static bool stream_sensor_channel6_enabled;
+static bool stream_sensor_channel7_enabled;
+static bool stream_sensor_channel8_enabled;
 static bool stream_sensor_hr_enabled;
 static bool stream_sensor_spo2_enabled;
 static bool stream_sensor_temp_enabled;
@@ -61,6 +66,26 @@ static void ble_ccc_stream_channel2_cfg_changed(const struct bt_gatt_attr *attr,
 static void ble_ccc_stream_channel3_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
 	stream_sensor_channel3_enabled = (value == BT_GATT_CCC_NOTIFY);
+}
+static void ble_ccc_stream_channel4_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	stream_sensor_channel4_enabled = (value == BT_GATT_CCC_NOTIFY);
+}
+static void ble_ccc_stream_channel5_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	stream_sensor_channel5_enabled = (value == BT_GATT_CCC_NOTIFY);
+}
+static void ble_ccc_stream_channel6_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	stream_sensor_channel6_enabled = (value == BT_GATT_CCC_NOTIFY);
+}
+static void ble_ccc_stream_channel7_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	stream_sensor_channel7_enabled = (value == BT_GATT_CCC_NOTIFY);
+}
+static void ble_ccc_stream_channel8_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	stream_sensor_channel8_enabled = (value == BT_GATT_CCC_NOTIFY);
 }
 static void ble_ccc_stream_hr_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
@@ -170,6 +195,26 @@ BT_GATT_SERVICE_DEFINE(
 			       NULL, NULL),
 	BT_GATT_CCC(ble_ccc_stream_channel3_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_STREAM_CHANNEL4, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE, NULL,
+			       NULL, NULL),
+	BT_GATT_CCC(ble_ccc_stream_channel4_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_STREAM_CHANNEL5, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE, NULL,
+			       NULL, NULL),
+	BT_GATT_CCC(ble_ccc_stream_channel5_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_STREAM_CHANNEL6, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE, NULL,
+			       NULL, NULL),
+	BT_GATT_CCC(ble_ccc_stream_channel6_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_STREAM_CHANNEL7, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE, NULL,
+			       NULL, NULL),
+	BT_GATT_CCC(ble_ccc_stream_channel7_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_STREAM_CHANNEL8, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE, NULL,
+			       NULL, NULL),
+	BT_GATT_CCC(ble_ccc_stream_channel8_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+
 	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_STREAM_HR, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE, NULL,
 			       NULL, NULL),
 	BT_GATT_CCC(ble_ccc_stream_hr_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
@@ -194,7 +239,7 @@ BT_GATT_SERVICE_DEFINE(
 );
 
 int init_ble_service(struct ble_cb *callbacks){
-	cb.is_streaming = callbacks->is_streaming;
+	cb.sensor_data_download_cb = callbacks->sensor_data_download_cb;
 	cb.sensor_switch_cb = callbacks->sensor_switch_cb;
 	return 0;
 }
@@ -264,30 +309,61 @@ int stream_sensor_data(enum SensorType sensor_type, uint32_t *sensor_value, ssiz
 				return -EACCES;
 			}
 			break;
-		case HR:
+		case CHANNEL4:
 			attr = &exg_service.attrs[10];
+			if (!stream_sensor_channel1_enabled) {
+				return -EACCES;
+			}
+			break;
+		case CHANNEL5:
+			attr = &exg_service.attrs[13];
+			if (!stream_sensor_channel2_enabled) {
+				return -EACCES;
+			}
+			break;
+		case CHANNEL6:
+			attr = &exg_service.attrs[16];
+			if (!stream_sensor_channel3_enabled) {
+				return -EACCES;
+			}
+			break;
+		case CHANNEL7:
+			attr = &exg_service.attrs[19];
+			if (!stream_sensor_channel1_enabled) {
+				return -EACCES;
+			}
+			break;
+		case CHANNEL8:
+			attr = &exg_service.attrs[22];
+			if (!stream_sensor_channel2_enabled) {
+				return -EACCES;
+			}
+			break;
+		case HR:
+			attr = &exg_service.attrs[25];
 			if (!stream_sensor_hr_enabled) {
 				return -EACCES;
 			}
 			break;
 		case SPO2:
-			attr = &exg_service.attrs[13];
+			attr = &exg_service.attrs[28];
 			if (!stream_sensor_spo2_enabled) {
 				return -EACCES;
 			}
 			break;
 		case TEMP:
-			attr = &exg_service.attrs[16];
+			attr = &exg_service.attrs[31];
 			if (!stream_sensor_temp_enabled) {
 				return -EACCES;
 			}
 			break;
 		case GLUCOSE:
-			attr = &exg_service.attrs[19];
+			attr = &exg_service.attrs[34];
 			if (!stream_sensor_glucose_enabled) {
 				return -EACCES;
 			}
 			break;
+		
 		default:
 			return -EINVAL;
 	}
@@ -297,7 +373,11 @@ int stream_sensor_data(enum SensorType sensor_type, uint32_t *sensor_value, ssiz
 
 
 
-
+int register_ble_cb(struct ble_cb *callbacks){
+	cb.sensor_switch_cb = callbacks->sensor_switch_cb;
+	cb.sensor_data_download_cb = callbacks->sensor_data_download_cb;
+	return 0;
+};
 
 int ble_main(void)
 {	
@@ -327,4 +407,4 @@ int ble_main(void)
 	return 0;
 }
 
-K_THREAD_DEFINE(ble_t, 4096, ble_main, NULL, NULL, NULL, PRIO, 0, 0);
+// K_THREAD_DEFINE(ble_t, 4096, ble_main, NULL, NULL, NULL, PRIO, 0, 0);

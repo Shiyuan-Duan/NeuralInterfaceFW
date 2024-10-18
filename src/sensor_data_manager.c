@@ -10,7 +10,7 @@
 #include "ads1299.h"
 #include "ble.h"
 
-#define PRIORITY 1
+#define PRIORITY 2
 
 #define ADS1299_NUM_CHANNELS          8
 #define ADS1299_BITS_PER_CHANNEL      24
@@ -20,7 +20,28 @@
 #define ADS1299_DATA_SIZE             (ADS1299_STATUS_BYTES + (ADS1299_NUM_CHANNELS * ADS1299_BYTES_PER_CHANNEL)) // 27 bytes
 #define DATA_SIZE ADS1299_DATA_SIZE  // 27 bytes
 
-#define BUFFER_SIZE 9  // Number of samples to buffer before sending
+#define BUFFER_SIZE 60  // Number of samples to buffer before sending
+const struct device *dev = DEVICE_DT_GET(DT_NODELABEL(ads1299));
+
+LOG_MODULE_REGISTER(ADS1299_MANAGER, LOG_LEVEL_INF);
+int toggle_sensor(uint8_t val)
+{   
+    printk("Toggling sensor to %d\n", val); 
+    if(val){
+        ads1299_wakeup(dev);
+        printk("Waking up sensor\n");
+    }else{
+        ads1299_standby(dev);
+        printk("Putting sensor in standby\n");
+    }
+    return 0;
+}
+
+struct ble_cb cb = {
+    .sensor_switch_cb = toggle_sensor,
+    .sensor_data_download_cb = NULL,
+};
+
 
 void process_data(uint8_t *data_buffer, int32_t *channel_data)
 {
@@ -48,8 +69,11 @@ void process_data(uint8_t *data_buffer, int32_t *channel_data)
 }
 
 void data_thread(void)
-{
-    const struct device *dev = DEVICE_DT_GET(DT_NODELABEL(ads1299));
+{   
+
+    register_ble_cb(&cb);
+
+    
     uint8_t data_buffer[DATA_SIZE];
     int64_t prev_time = 0;
     int64_t current_time = 0; // Variable to store the current timestamp
@@ -80,6 +104,7 @@ void data_thread(void)
 
     while (1) {
         err = ads1299_read_data(dev, data_buffer, DATA_SIZE); // Capture return value
+        
         if (err == 0) {
             // Get the current timestamp
             current_time = k_uptime_get();
@@ -99,6 +124,8 @@ void data_thread(void)
 
             // Process your data here
             int32_t channel_data[ADS1299_NUM_CHANNELS];
+
+            
             process_data(data_buffer, channel_data);
 
             // Accumulate data in buffers
@@ -110,28 +137,61 @@ void data_thread(void)
             channel6_buffer[buffer_index] = channel_data[5];
             channel7_buffer[buffer_index] = channel_data[6];
             channel8_buffer[buffer_index] = channel_data[7];
-            
+
             buffer_index++;
 
             // If buffer is full, send the data
             if (buffer_index >= BUFFER_SIZE) {
                 // Send channel1_buffer
                 int ret1 = stream_sensor_data(CHANNEL1, channel1_buffer, sizeof(channel1_buffer));
+
                 if (ret1 < 0) {
-                    printk("Failed to stream CHANNEL1 data: %d\n", ret1);
+                    LOG_ERR("Failed to stream CHANNEL1 data: %d\n", ret1);
                 }
 
                 // Send channel2_buffer
                 int ret2 = stream_sensor_data(CHANNEL2, channel2_buffer, sizeof(channel2_buffer));
                 if (ret2 < 0) {
-                    printk("Failed to stream CHANNEL2 data: %d\n", ret2);
+                    LOG_ERR("Failed to stream CHANNEL2 data: %d\n", ret2);
                 }
 
                 // Send channel3_buffer
                 int ret3 = stream_sensor_data(CHANNEL3, channel3_buffer, sizeof(channel3_buffer));
                 if (ret3 < 0) {
-                    printk("Failed to stream CHANNEL3 data: %d\n", ret3);
+                    LOG_ERR("Failed to stream CHANNEL3 data: %d\n", ret3);
                 }
+
+                // Send channel4_buffer
+                int ret4 = stream_sensor_data(CHANNEL4, channel4_buffer, sizeof(channel4_buffer));
+                if (ret4 < 0) {
+                    LOG_ERR("Failed to stream CHANNEL4 data: %d\n", ret4);
+                }
+
+                // Send channel5_buffer
+                int ret5 = stream_sensor_data(CHANNEL5, channel5_buffer, sizeof(channel5_buffer));
+                if (ret5 < 0) {
+                    LOG_ERR("Failed to stream CHANNEL5 data: %d\n", ret5);
+                }
+
+                // Send channel6_buffer
+                int ret6 = stream_sensor_data(CHANNEL6, channel6_buffer, sizeof(channel6_buffer));
+                if (ret6 < 0) {
+                    LOG_ERR("Failed to stream CHANNEL6 data: %d\n", ret6);
+                }
+                
+                // Send channel7_buffer
+                int ret7 = stream_sensor_data(CHANNEL7, channel7_buffer, sizeof(channel7_buffer));
+                if (ret7 < 0) {
+                    LOG_ERR("Failed to stream CHANNEL7 data: %d\n", ret7);
+                }
+
+                // Send channel8_buffer
+                int ret8 = stream_sensor_data(CHANNEL8, channel8_buffer, sizeof(channel8_buffer));
+                if (ret8 < 0) {
+                    LOG_ERR("Failed to stream CHANNEL8 data: %d\n", ret8);
+                }
+                
+                
 
                 // Reset buffer index
                 buffer_index = 0;
@@ -141,7 +201,7 @@ void data_thread(void)
             }
 
         } else {
-            printk("Error reading data: %d\n", err); // Enhanced error logging
+            LOG_ERR("Error reading data: %d\n", err); // Enhanced error logging
         }
 
         // Optional: Yield to allow other threads to run
