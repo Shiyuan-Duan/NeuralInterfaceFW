@@ -316,8 +316,30 @@ static int config_sample_rate(const struct device *dev)
     int err;
     uint8_t data = 0x00;
     err = ads1299_read_reg(dev, 0x01, &data, 1);
-    data &= ~0x07; // Clear bits [2:0]
-    data |= 0x05;  // Set bits [2:0] to 101                                                                  
+    if(CONFIG_ADS1299_SAMPLE_RATE == 250){
+        data &= ~0x07; // Clear bits [2:0]
+        data |= 0x06;  // Set bits [2:0] to 110
+    }else if(CONFIG_ADS1299_SAMPLE_RATE == 500){
+        data &= ~0x07; // Clear bits [2:0]
+        data |= 0x05;  // Set bits [2:0] to 101
+    }else if(CONFIG_ADS1299_SAMPLE_RATE == 1000){
+        data &= ~0x07; // Clear bits [2:0]
+        data |= 0x04;  // Set bits [2:0] to 100
+    }else if(CONFIG_ADS1299_SAMPLE_RATE == 2000){
+        data &= ~0x07; // Clear bits [2:0]
+        data |= 0x03;  // Set bits [2:0] to 011
+    }else if(CONFIG_ADS1299_SAMPLE_RATE == 4000){
+        data &= ~0x07; // Clear bits [2:0]
+        data |= 0x02;  // Set bits [2:0] to 010
+    }else if(CONFIG_ADS1299_SAMPLE_RATE == 8000){
+        data &= ~0x07; // Clear bits [2:0]
+        data |= 0x01;  // Set bits [2:0] to 001
+    }else if(CONFIG_ADS1299_SAMPLE_RATE == 16000){
+        data &= ~0x07; // Clear bits [2:0]
+        data |= 0x00;  // Set bits [2:0] to 000
+    }else{
+        return -1;
+    }                                                                
     err = ads1299_write_register(dev, 0x01, data);
     if (err < 0) {
         LOG_ERR("Error writing register\n");
@@ -449,9 +471,10 @@ static int init_ads1299(const struct device *dev)
 
     LOG_INF("ADS1299 driver initialized successfully\n");
 
-
+    uint8_t srs_data = 0x00;
+    err = ads1299_read_reg(dev, 0x01, &srs_data, 1);
+    printk("Data read from register 0x01: 0x%02x\n", srs_data);
     // Reset device
-
 
 
 
@@ -482,7 +505,7 @@ static int init_ads1299(const struct device *dev)
     }
 
     // Set sample rate
-    err = config_sample_rate(dev);
+    // err = config_sample_rate(dev);
 
 
     /* Send RDATAC command to start continuous data mode */
@@ -501,6 +524,9 @@ static int init_ads1299(const struct device *dev)
     }
 
     printk("ADS1299 started data conversions\n");
+
+    // Everything is ready, put to standby
+    err = _ads1299_standby(dev);
     return 0;
 }
 

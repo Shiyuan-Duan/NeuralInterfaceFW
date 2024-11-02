@@ -37,13 +37,15 @@
 
 #define STATUS3_REG 0xC0
 
+#define MAX_PAGE_SIZE 2048
+
 // typedef int  (*max30003_api_print_cnfg)(const struct device * dev);
 // typedef int  (*max30003_api_synch_ecg)(const struct device * dev);
 // typedef int  (*max30003_api_fifo_read)(const struct device * dev, uint8_t *buf);
 // typedef int  (*max30003_api_read_status)(const struct device * dev);
 
 typedef int (*w25m02gw_api_read)(const struct device *dev, uint16_t block_addr, uint8_t page_addr, uint16_t column_addr, uint8_t * output, size_t output_size);
-typedef int (*w25m02gw_api_write)(const struct device *dev, uint16_t block_addr, uint8_t page_addr, uint16_t column_addr, uint8_t * buffer, size_t buffer_size);
+typedef int (*w25m02gw_api_write)(const struct device *dev, uint16_t block_addr, uint8_t page_addr, uint8_t * buffer, size_t buffer_size);
 typedef int (*w25m02gw_api_erase)(const struct device *dev, uint16_t block_addr);
 typedef int (*w25m02gw_api_set_opmode)(const struct device *dev, uint8_t *opmode);
 struct w25m02gw_driver_api_funcs {
@@ -53,53 +55,46 @@ struct w25m02gw_driver_api_funcs {
     w25m02gw_api_erase erase;
 };
 
-__syscall     void        w25m02gw_read(const struct device * dev, uint16_t block_addr, uint8_t page_addr, uint16_t column_addr, uint8_t * output, size_t output_size);
+__syscall     int        w25m02gw_read(const struct device * dev, uint16_t block_addr, uint8_t page_addr, uint16_t column_addr, uint8_t * output, size_t output_size);
 
 /* STEP 4.4 - Implement the Z_impl_* translation function to call the device driver API for this feature */
-static inline void z_impl_w25m02gw_read(const struct device * dev, uint16_t block_addr, uint8_t page_addr, uint16_t column_addr, uint8_t * output, size_t output_size)
+static inline int z_impl_w25m02gw_read(const struct device * dev, uint16_t block_addr, uint8_t page_addr, uint16_t column_addr, uint8_t * output, size_t output_size)
 {
     const struct w25m02gw_driver_api_funcs *api = dev->api;
 
     __ASSERT(api->read, "Callback pointer should not be NULL");
 
-    api->read(dev, block_addr, page_addr, column_addr, output, output_size);
+    return api->read(dev, block_addr, page_addr, column_addr, output, output_size);
 }
 
 
-__syscall     void        w25m02gw_write(const struct device * dev, uint16_t block_addr, uint8_t page_addr, uint16_t column_addr, uint8_t * buffer, size_t buffer_size);
+__syscall     int        w25m02gw_write(const struct device * dev, uint16_t block_addr, uint8_t page_addr, uint8_t * buffer, size_t buffer_size);
 
 /* STEP 4.4 - Implement the Z_impl_* translation function to call the device driver API for this feature */
-static inline void z_impl_w25m02gw_write(const struct device * dev, uint16_t block_addr, uint8_t page_addr, uint16_t column_addr, uint8_t * buffer, size_t buffer_size)
+static inline int z_impl_w25m02gw_write(const struct device * dev, uint16_t block_addr, uint8_t page_addr, uint8_t * buffer, size_t buffer_size)
 {
     const struct w25m02gw_driver_api_funcs *api = dev->api;
 
     __ASSERT(api->write, "Callback pointer should not be NULL");
 
-    api->write(dev, block_addr, page_addr, column_addr, buffer, buffer_size);
+    return api->write(dev, block_addr, page_addr, buffer, buffer_size);
+
 }
 
-__syscall     void        w25m02gw_erase(const struct device * dev, uint16_t block_addr);
+__syscall     int        w25m02gw_erase_block(const struct device * dev, uint16_t block_addr);
 
 /* STEP 4.4 - Implement the Z_impl_* translation function to call the device driver API for this feature */
-static inline void z_impl_w25m02gw_erase(const struct device * dev, uint16_t block_addr)
+static inline int z_impl_w25m02gw_erase_block(const struct device * dev, uint16_t block_addr)
 {
     const struct w25m02gw_driver_api_funcs *api = dev->api;
 
     __ASSERT(api->erase, "Callback pointer should not be NULL");
 
-    api->erase(dev, block_addr);
+    return api->erase(dev, block_addr);
 }
 
 #include <syscalls/w25m02gw.h>
-// /* STEP 4.4 - Implement the Z_impl_* translation function to call the device driver API for this feature */
-// static inline void z_impl_max30003_read_status(const struct device * dev)
-// {
-// 	const struct max30003_driver_api_funcs *api = dev->api;
 
-// 	__ASSERT(api->print_cnfg, "Callback pointer should not be NULL");
-
-// 	api->read_status(dev);
-// }
 
 
 

@@ -10,3 +10,9 @@ config ADS1299_INIT_PRIORITY
 	default 90
 	help
 	  ADS1299 initialization priority.
+
+config ADS1299_SAMPLE_RATE
+	int "ADS1299 sample rate"
+	default 250
+	help
+	  ADS1299 sample rate in Hz

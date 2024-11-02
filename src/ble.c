@@ -107,6 +107,7 @@ static void ble_ccc_stream_glucose_cfg_changed(const struct bt_gatt_attr *attr, 
 
 
 
+
 static ssize_t write_sensor_sw(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
 	if (len != 1) {
@@ -136,6 +137,23 @@ static ssize_t read_sensor_sw(struct bt_conn *conn, const struct bt_gatt_attr *a
 
 
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &sensor_sw_value, sizeof(sensor_sw_value));
+}
+
+static ssize_t write_sensor_data_download_sw(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+{
+	if (len != 1) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+
+	uint8_t value = *((uint8_t *)buf);
+
+	if(value == 1){
+		cb.sensor_data_download_cb(1);
+	}else{
+		cb.sensor_data_download_cb(0);
+	}
+
+	return len;
 }
 
 static ssize_t bt_write_reset(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
@@ -234,8 +252,8 @@ BT_GATT_SERVICE_DEFINE(
 
 	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_SW, BT_GATT_CHRC_WRITE|BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE|BT_GATT_PERM_READ, read_sensor_sw, write_sensor_sw, &is_sensor_on),
 	BT_GATT_CHARACTERISTIC(BT_UUID_RESET, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_write_reset, NULL),
-	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_STREAM_SW, BT_GATT_CHRC_WRITE|BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE|BT_GATT_PERM_READ, read_sensor_stream_sw, write_sensor_stream_sw, &is_streaming)
-
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_STREAM_SW, BT_GATT_CHRC_WRITE|BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE|BT_GATT_PERM_READ, read_sensor_stream_sw, write_sensor_stream_sw, &is_streaming),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_DOWNLOAD_DATA_SW, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, write_sensor_data_download_sw, NULL),
 );
 
 int init_ble_service(struct ble_cb *callbacks){
@@ -407,4 +425,4 @@ int ble_main(void)
 	return 0;
 }
 
-// K_THREAD_DEFINE(ble_t, 4096, ble_main, NULL, NULL, NULL, PRIO, 0, 0);
+K_THREAD_DEFINE(ble_t, 4096, ble_main, NULL, NULL, NULL, PRIO, 0, 0);

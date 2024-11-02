@@ -71,6 +71,9 @@ enum SensorType {
 #define BT_UUID_SENSOR_STREAM_SW_VAL \
 	BT_UUID_128_ENCODE(0xA0A43195, 0x96BE, 0x4222, 0xB41E, 0x98EA76B0120C)
 
+#define BT_UUID_SENSOR_DOWNLOAD_DATA_SW_VAL \
+	BT_UUID_128_ENCODE(0xA0A43196, 0x96BE, 0x4222, 0xB41E, 0x98EA76B0120C)
+
 
 
 
@@ -95,6 +98,7 @@ enum SensorType {
 #define BT_UUID_SENSOR_SW       				BT_UUID_DECLARE_128(BT_UUID_SENSOR_SW_VAL)
 #define BT_UUID_RESET	  						BT_UUID_DECLARE_128(BT_UUID_RESET_VAL)
 #define BT_UUID_SENSOR_STREAM_SW				BT_UUID_DECLARE_128(BT_UUID_SENSOR_STREAM_SW_VAL)
+#define BT_UUID_SENSOR_DOWNLOAD_DATA_SW			BT_UUID_DECLARE_128(BT_UUID_SENSOR_DOWNLOAD_DATA_SW_VAL)
 
 typedef int (*sensor_switch_cb_t) (uint8_t value);
 typedef int (*sensor_data_download_cb_t) (uint8_t value);
@@ -102,6 +106,7 @@ typedef int (*sensor_data_download_cb_t) (uint8_t value);
 
 struct ble_cb  {
 	sensor_switch_cb_t sensor_switch_cb;
+	
 	sensor_data_download_cb_t sensor_data_download_cb;
 };
 struct sensor_state{
