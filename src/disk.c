@@ -1,11 +1,13 @@
+//disk.c
 #include "disk.h"
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <string.h>
+#include <zephyr/logging/log.h>
 #include "w25m02gw.h"
 
 // Device instance
-static const struct device *nand_dev = NULL;
+
 
 // Flash memory specifications
 #define PAGE_SIZE 2048               // Size of a page in bytes
@@ -15,19 +17,19 @@ static const struct device *nand_dev = NULL;
 
 // Block and page constraints
 #define METADATA_BLOCK 0             // Block used for metadata
-#define METADATA_PAGE 13              // Page used for metadata
+#define METADATA_PAGE 0              // Page used for metadata
 #define START_BLOCK 1                // Start block for recording data
-#define START_PAGE 13                // Skip first 13 pages in each block
+#define START_PAGE 0                // Skip first 13 pages in each block
 #define USABLE_PAGES_PER_BLOCK (PAGES_PER_BLOCK - START_PAGE)
-#define CHUNK_SIZE 128 // Define the chunk size to 256 bytes
 
-// Utility macros
+LOG_MODULE_REGISTER(DISK, LOG_LEVEL_INF);
+
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-// Unique identifier for metadata validation
+
 #define METADATA_SIGNATURE 0xDEADBEEF
 
-// Metadata structure
+
 typedef struct {
     uint32_t signature;                    // Unique identifier
     char name[RECORDING_NAME_MAX_LENGTH];  // Recording name
@@ -40,257 +42,273 @@ typedef struct {
 
 static DiskMetadata metadata;
 
-// Internal functions
+
 static DiskStatus load_metadata(void);
 static DiskStatus save_metadata(void);
 static DiskStatus erase_data_blocks(void);
 
-// Initialize the disk system
-DiskStatus disk_init(void) {
-    // nand_dev = DEVICE_DT_GET_ANY(dsy_w25m02gw);
-    // if (!device_is_ready(nand_dev)) {
-    //     printk("NAND device not ready\n");
-    //     return DISK_ERR_DEVICE_NOT_READY;
-    // }
+static const struct device *nand_dev = DEVICE_DT_GET_ANY(dsy_w25m02gw);
 
-    // // Load metadata from flash
-    // DiskStatus status = load_metadata();
-    // if (status != DISK_OK) {
-    //     // If metadata is invalid, initialize it
-    //     memset(&metadata, 0, sizeof(DiskMetadata));
-    //     metadata.signature = METADATA_SIGNATURE;
-    //     strcpy(metadata.name, "NI_recording");
-    //     metadata.current_block = START_BLOCK;
-    //     metadata.current_page = START_PAGE;
-    //     save_metadata();
-    // }
+
+DiskStatus disk_init(void) {
+    if (!nand_dev) {
+        printk("Failed to get NAND device\n");
+        return DISK_ERR_DEVICE_NOT_READY;
+    }
+
+    // Initialize the device (if required)
+    if (!device_is_ready(nand_dev)) {
+        printk("NAND device not ready\n");
+        return DISK_ERR_DEVICE_NOT_READY;
+    }
+
+    // Load existing metadata
+    return load_metadata();
+}
+
+
+DiskStatus disk_start_recording(const char *name) {
+    // Initialize metadata
+    LOG_INF("Starting new recording: %s", name);
+    memset(&metadata, 0, sizeof(DiskMetadata));
+    LOG_INF("1");
+    metadata.signature = METADATA_SIGNATURE;
+    LOG_INF("2");
+    strncpy(metadata.name, name, RECORDING_NAME_MAX_LENGTH - 1);
+    LOG_INF("3");
+    metadata.size = 0;
+    LOG_INF("4");
+    metadata.current_block = START_BLOCK;
+    LOG_INF("5");
+    metadata.current_page = START_PAGE;
+    metadata.event_count = 0;
+    LOG_INF("Initialized new metadata");
+    // Save metadata
+    DiskStatus status = save_metadata();
+    if (status != DISK_OK) {
+        return status;
+    }
+    LOG_INF("Saved metadata");
+
     return DISK_OK;
 }
 
-// Start a new recording
-DiskStatus disk_start_recording(const char *name) {
-    // // Erase existing data blocks
-    // DiskStatus status = erase_data_blocks();
-    // if (status != DISK_OK) {
-    //     return status;
-    // }
 
-    // // Initialize metadata
-    // memset(&metadata, 0, sizeof(DiskMetadata));
-    // metadata.signature = METADATA_SIGNATURE;
-    // if (name && strlen(name) < RECORDING_NAME_MAX_LENGTH) {
-    //     strcpy(metadata.name, name);
-    // } else {
-    //     strcpy(metadata.name, "NI_recording");
-    // }
-    // metadata.current_block = START_BLOCK;
-    // metadata.current_page = START_PAGE;
 
-    // Save metadata to flash
-    return save_metadata();
 
-}
-
-// Write data to the recording
 DiskStatus disk_write_data(const uint8_t *data, size_t length) {
-    // if (!data || length == 0) {
-    //     return DISK_ERR_INVALID_OPERATION;
-    // }
+    int err;
 
-    // size_t bytes_written = 0;
-    // uint8_t buffer[PAGE_SIZE] = {0}; // Buffer for writing a full page
-    // while (bytes_written < length) {
-    //     size_t to_write = MIN(length - bytes_written, PAGE_SIZE); // Write up to a page size (2048 bytes)
-    //     memcpy(buffer, data + bytes_written, to_write);
+    // Check if we need to erase the current block
+    static uint16_t last_erased_block = 0xFFFF; // Initialize to an invalid block number
+    if (metadata.current_block != last_erased_block) {
+        // Erase the block before writing to it
+        err = w25m02gw_erase_block(nand_dev, metadata.current_block);
+        if (err < 0) {
+            printk("Failed to erase block %d\n", metadata.current_block);
+            return DISK_ERR_UNKNOWN;
+        }
+        last_erased_block = metadata.current_block;
+    }
 
-    //     // Write data in chunks of 256 bytes
-    //     size_t chunk_offset = 0;
-    //     while (chunk_offset < to_write) {
-    //         size_t chunk_size = MIN(to_write - chunk_offset, CHUNK_SIZE); // Write up to 256 bytes at a time
+    // Write data to the current page
+    size_t write_size = MIN(length, PAGE_SIZE);
+    err = w25m02gw_write(nand_dev, metadata.current_block, metadata.current_page, (uint8_t *)data, write_size);
+    if (err < 0) {
+        printk("Failed to write data to flash\n");
+        return DISK_ERR_UNKNOWN;
+    }
 
-    //         // Write a chunk to flash
-    //         printk("Writing to block %d, page %d, offset %d, size %d\n", metadata.current_block, metadata.current_page, chunk_offset, chunk_size);
-    //         w25m02gw_write(nand_dev, metadata.current_block, metadata.current_page, chunk_offset, buffer + chunk_offset, chunk_size);
-    //         printk("Data written: %x\n", buffer[0]);
-    //         chunk_offset += chunk_size;
-    //     }
+    // Update metadata
+    metadata.size += write_size;
 
-    //     // Update metadata
-    //     metadata.size += to_write;
-    //     bytes_written += to_write;
-    //     metadata.current_page++;
+    // Move to the next page
+    metadata.current_page++;
+    if (metadata.current_page >= PAGES_PER_BLOCK) {
+        // Move to the next block
+        metadata.current_page = START_PAGE;
+        metadata.current_block++;
+        if (metadata.current_block >= TOTAL_BLOCKS) {
+            printk("No more space on disk\n");
+            return DISK_ERR_NO_SPACE;
+        }
+    }
 
-    //     if (metadata.current_page >= PAGES_PER_BLOCK) {
-    //         // Move to the next block
-    //         metadata.current_block++;
-    //         if (metadata.current_block >= TOTAL_BLOCKS) {
-    //             return DISK_ERR_NO_SPACE;
-    //         }
-    //         metadata.current_page = START_PAGE; // Skip the first few pages in the block
-    //         w25m02gw_erase(nand_dev, metadata.current_block); // Erase the new block
-    //     }
-    // }
+    // Save metadata
+    DiskStatus status = save_metadata();
+    if (status != DISK_OK) {
+        return status;
+    }
 
-    // Save updated metadata
-    return save_metadata();
+    return DISK_OK;
 }
-// Read data from the recording
+
+
 
 
 DiskStatus disk_read_data(DataCallback callback) {
-    // if (!callback) {
-    //     return DISK_ERR_INVALID_OPERATION;
-    // }
+    static uint8_t buffer[PAGE_SIZE];
+    uint16_t block = START_BLOCK;
+    uint8_t page = START_PAGE;
+    uint32_t total_read = 0;
+    int err;
 
-    // uint32_t bytes_remaining = metadata.size;
-    // uint16_t block_addr = START_BLOCK;
-    // uint8_t page_addr = START_PAGE;
+    while (total_read < metadata.size) {
+        size_t read_size = MIN(PAGE_SIZE, metadata.size - total_read);
 
-    // while (bytes_remaining > 0) {
-    //     uint32_t page_bytes_remaining = MIN(bytes_remaining, PAGE_SIZE);
-    //     uint32_t page_offset = 0;
+        err = w25m02gw_read(nand_dev, block, page, 0, buffer, read_size);
+        if (err < 0) {
+            printk("Failed to read data from flash\n");
+            return DISK_ERR_UNKNOWN;
+        }
 
-    //     // Read data in chunks within the current page
-    //     while (page_bytes_remaining > 0) {
-    //         uint8_t buffer[CHUNK_SIZE] = {0}; // Allocate buffer on the stack for each chunk
-    //         size_t chunk_size = MIN(page_bytes_remaining, CHUNK_SIZE);
-    //         printk("Reading from block %d, page %d, offset %d, size %d\n", block_addr, page_addr, page_offset, chunk_size);
-    //         // Read a chunk from flash
-    //         w25m02gw_read(nand_dev, block_addr, page_addr, page_offset, buffer, chunk_size);
-    //         printk("Data read: %x\n", buffer[0]);
+        // Call the callback function
+        callback(buffer, read_size);
 
-    //         // Call the callback with the chunk
-    //         callback(buffer, chunk_size);
+        total_read += read_size;
 
-    //         bytes_remaining -= chunk_size;
-    //         page_bytes_remaining -= chunk_size;
-    //         page_offset += chunk_size;
+        // Move to the next page
+        page++;
+        if (page >= PAGES_PER_BLOCK) {
+            // Move to the next block
+            page = START_PAGE;
+            block++;
+            if (block >= TOTAL_BLOCKS) {
+                printk("Unexpected end of disk\n");
+                return DISK_ERR_UNKNOWN;
+            }
+        }
+    }
 
-    //         // If no more bytes remaining, break out
-    //         if (bytes_remaining == 0) {
-    //             break;
-    //         }
-    //     }
-
-    //     page_addr++;
-    //     if (page_addr >= PAGES_PER_BLOCK) {
-    //         block_addr++;
-    //         if (block_addr >= TOTAL_BLOCKS) {
-    //             return DISK_ERR_UNKNOWN;
-    //         }
-    //         page_addr = START_PAGE;
-    //     }
-    // }
     return DISK_OK;
 }
 
 
-// Add an event marking to the recording
+
 DiskStatus disk_add_event(uint32_t time, uint16_t event_number) {
-    // if (metadata.event_count >= MAX_EVENTS) {
-    //     return DISK_ERR_NO_SPACE;
-    // }
-
-    // metadata.events[metadata.event_count].time = time;
-    // metadata.events[metadata.event_count].event_number = event_number;
-    // metadata.event_count++;
-
-    // Save updated metadata
-    return save_metadata();
-}
-
-// Delete the recording
-DiskStatus disk_delete_recording(void) {
-    // Erase data blocks
-    // DiskStatus status = erase_data_blocks();
-    // if (status != DISK_OK) {
-    //     return status;
-    // }
-
-    // // Reset metadata
-    // memset(&metadata, 0, sizeof(DiskMetadata));
-    // metadata.signature = METADATA_SIGNATURE;
-    // strcpy(metadata.name, "NI_recording");
-    // metadata.current_block = START_BLOCK;
-    // metadata.current_page = START_PAGE;
+    if (metadata.event_count >= MAX_EVENTS) {
+        printk("Event list is full\n");
+        return DISK_ERR_METADATA_INVALID;
+    }
+    metadata.events[metadata.event_count].time = time;
+    metadata.events[metadata.event_count].event_number = event_number;
+    metadata.event_count++;
 
     // Save metadata
-    return save_metadata();
+    DiskStatus status = save_metadata();
+    if (status != DISK_OK) {
+        return status;
+    }
+
+    return DISK_OK;
 }
 
-// Get the size of the recording
+// Might not need this function
+// DiskStatus disk_delete_recording(void) {
+
+//     return 0;
+// }
+
+
 DiskStatus disk_get_recording_size(uint32_t *size) {
-    // if (!size) {
-    //     return DISK_ERR_INVALID_OPERATION;
-    // }
-    // *size = metadata.size;
+    if (!size) {
+        return DISK_ERR_UNKNOWN;
+    }
+    *size = metadata.size;
     return DISK_OK;
 }
 
-// Get the name of the recording
 DiskStatus disk_get_recording_name(char *name_buffer, size_t buffer_length) {
-    // if (!name_buffer || buffer_length < RECORDING_NAME_MAX_LENGTH) {
-    //     return DISK_ERR_INVALID_OPERATION;
-    // }
-    // strncpy(name_buffer, metadata.name, RECORDING_NAME_MAX_LENGTH);
+    if (!name_buffer || buffer_length == 0) {
+        return DISK_ERR_UNKNOWN;
+    }
+    strncpy(name_buffer, metadata.name, buffer_length - 1);
+    name_buffer[buffer_length - 1] = '\0'; // Ensure null-termination
     return DISK_OK;
 }
 
-// Get the list of event markings
+
 DiskStatus disk_get_events(EventMark *events_buffer, uint16_t *event_count) {
-    // if (!events_buffer || !event_count) {
-    //     return DISK_ERR_INVALID_OPERATION;
-    // }
-    // memcpy(events_buffer, metadata.events, metadata.event_count * sizeof(EventMark));
-    // *event_count = metadata.event_count;
+    if (!events_buffer || !event_count) {
+        return DISK_ERR_UNKNOWN;
+    }
+    if (*event_count < metadata.event_count) {
+        // Not enough space in events_buffer
+        return DISK_ERR_UNKNOWN;
+    }
+    memcpy(events_buffer, metadata.events, metadata.event_count * sizeof(EventMark));
+    *event_count = metadata.event_count;
     return DISK_OK;
 }
 
-// Internal function to load metadata from flash
+
 static DiskStatus load_metadata(void) {
-    // uint8_t buffer[PAGE_SIZE] = {0};
-    // w25m02gw_read(nand_dev, METADATA_BLOCK, METADATA_PAGE, 0, buffer, sizeof(DiskMetadata));
-    // memcpy(&metadata, buffer, sizeof(DiskMetadata));
+    int err;
+    uint8_t buffer[sizeof(DiskMetadata)];
 
-    // // Validate the signature
-    // if (metadata.signature != METADATA_SIGNATURE) {
-    //     return DISK_ERR_METADATA_INVALID;
-    // }
+    // Read the metadata from METADATA_BLOCK and METADATA_PAGE
+    err = w25m02gw_read(nand_dev, METADATA_BLOCK, METADATA_PAGE, 0, buffer, sizeof(DiskMetadata));
+    if (err < 0) {
+        printk("Failed to read metadata\n");
+        return DISK_ERR_UNKNOWN;
+    }
 
-    // // Basic validation of current block and page
-    // if (metadata.current_block < START_BLOCK || metadata.current_block >= TOTAL_BLOCKS) {
-    //     return DISK_ERR_METADATA_INVALID;
-    // }
-    // if (metadata.current_page < START_PAGE || metadata.current_page >= PAGES_PER_BLOCK) {
-    //     return DISK_ERR_METADATA_INVALID;
-    // }
+    // Copy data into metadata structure
+    memcpy(&metadata, buffer, sizeof(DiskMetadata));
+
+    // Check if signature matches
+    if (metadata.signature != METADATA_SIGNATURE) {
+        // No valid metadata, initialize metadata
+        memset(&metadata, 0, sizeof(DiskMetadata));
+        metadata.signature = METADATA_SIGNATURE;
+        LOG_INF("Initialized new metadata \n");
+        return DISK_OK;
+    }
 
     return DISK_OK;
 }
 
-// Internal function to save metadata to flash
+
+
 static DiskStatus save_metadata(void) {
-    // static uint8_t buffer[PAGE_SIZE] = {0};
-    // memcpy(buffer, &metadata, sizeof(DiskMetadata));
+    int err;
 
-    // // Erase metadata block
-    // w25m02gw_erase(nand_dev, METADATA_BLOCK);
+    static uint8_t buffer[sizeof(DiskMetadata)];
 
-    // // Write metadata to flash in chunks of 256 bytes
-    // size_t chunk_offset = 0;
-    // while (chunk_offset < PAGE_SIZE) {
-    //     size_t chunk_size = MIN(PAGE_SIZE - chunk_offset, CHUNK_SIZE);
-    //     w25m02gw_write(nand_dev, METADATA_BLOCK, METADATA_PAGE, chunk_offset, buffer + chunk_offset, chunk_size);
-    //     chunk_offset += chunk_size;
-    // }
+    // Copy metadata into buffer
+    memcpy(buffer, &metadata, sizeof(DiskMetadata));
+
+    // Erase the metadata block before writing
+    err = w25m02gw_erase_block(nand_dev, METADATA_BLOCK);
+    if (err < 0) {
+        printk("Failed to erase metadata block\n");
+        return DISK_ERR_UNKNOWN;
+    }
+
+
+    // Write metadata to METADATA_BLOCK and METADATA_PAGE
+
+    err = w25m02gw_write(nand_dev, METADATA_BLOCK, METADATA_PAGE, buffer, sizeof(DiskMetadata));
+    if (err < 0) {
+        printk("Failed to write metadata\n");
+        return DISK_ERR_UNKNOWN;
+    }
+
 
     return DISK_OK;
 }
 
-// Internal function to erase data blocks
+
+
 static DiskStatus erase_data_blocks(void) {
-    // for (uint16_t block = START_BLOCK; block < TOTAL_BLOCKS; block++) {
-    //     w25m02gw_erase(nand_dev, block);
-    // }
+    int err;
+    for (uint16_t block = START_BLOCK; block < TOTAL_BLOCKS; block++) {
+        err = w25m02gw_erase_block(nand_dev, block);
+        if (err < 0) {
+            printk("Failed to erase block %d\n", block);
+            return DISK_ERR_UNKNOWN;
+        }
+    }
     return DISK_OK;
 }
+

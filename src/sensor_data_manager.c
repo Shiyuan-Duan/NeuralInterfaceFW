@@ -1,62 +1,65 @@
+// File: src/sensor_data_manager.c
+
 #include <stdio.h>
-#include <string.h> // Include for memcpy
+#include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
-#include <zephyr/devicetree.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 
 #include "ads1299.h"
 #include "ble.h"
-#include "disk.h" // Include the disk API
+#include "disk.h"
 
 #define PRIORITY 2
 
-// ADS1299 configuration
-#define ADS1299_NUM_CHANNELS          8
-#define ADS1299_BITS_PER_CHANNEL      24
-#define ADS1299_BYTES_PER_CHANNEL     (ADS1299_BITS_PER_CHANNEL / 8) // 3 bytes
-#define ADS1299_STATUS_BITS           24
-#define ADS1299_STATUS_BYTES          (ADS1299_STATUS_BITS / 8)      // 3 bytes
-#define ADS1299_DATA_SIZE             (ADS1299_STATUS_BYTES + (ADS1299_NUM_CHANNELS * ADS1299_BYTES_PER_CHANNEL)) // 27 bytes
+#define ADS1299_SAMPLE_RATE CONFIG_ADS1299_SAMPLE_RATE
+#define BLE_STREAM_INTERVAL (ADS1299_SAMPLE_RATE / 250)
 
-// Sample rate configuration (from Kconfig)
-#define SAMPLE_RATE CONFIG_ADS1299_SAMPLE_RATE // e.g., 250, 500, ..., 16000
-
-// Flash buffer configuration
-#define FLASH_BUFFER_DURATION_SEC 1 // Buffer duration in seconds
-#define FLASH_BUFFER_SIZE (SAMPLE_RATE * ADS1299_DATA_SIZE * FLASH_BUFFER_DURATION_SEC)
-
-// BLE streaming configuration
-#define BLE_STREAM_RATE 250 // Hz
-#define DOWNSAMPLE_FACTOR (SAMPLE_RATE / BLE_STREAM_RATE)
-
-// Ensure the downsample factor is at least 1
-#if DOWNSAMPLE_FACTOR < 1
-    #undef DOWNSAMPLE_FACTOR
-    #define DOWNSAMPLE_FACTOR 1
-#endif
-
-#define BLE_BUFFER_SIZE 60 // Number of samples to buffer per channel before sending
+#define FLASH_BUFFER_BATCH_SIZE 75
+#define BLE_BUFFER_SIZE 60
+#define ADS1299_NUM_CHANNELS 8
+#define ADS1299_DATA_SIZE 27
 
 const struct device *ads1299_dev = DEVICE_DT_GET(DT_NODELABEL(ads1299));
 
 LOG_MODULE_REGISTER(DATA_MANAGER, LOG_LEVEL_INF);
 
 // Global variables
-static bool recording_active = false; // Flag indicating if recording is active
+static bool recording_active = false;
+int ble_stream_counter = 0;
+
+// Flash buffer
+static uint8_t flash_data_buffer[2048] = {0};
+static uint8_t flash_buffer_batch_index = 0;
+
+// Read buffer
+static uint8_t read_buffer[2048];
 
 // Forward declarations
 static void process_data(uint8_t *data_buffer, int32_t *channel_data);
-static void save_data_to_flash(uint8_t *data_buffer, size_t data_size);
+static void save_data_to_flash(uint8_t *data_buffer);
+static void read_data_cb(const uint8_t *data, size_t length);
 static void download_data(void);
+void end_recording(void);
 
-// BLE callback functions
-static int toggle_sensor(uint8_t val)
+// Work items for offloading heavy processing
+static void toggle_sensor_work_handler(struct k_work *work);
+static void sensor_download_work_handler(struct k_work *work);
+
+K_WORK_DEFINE(toggle_sensor_work, toggle_sensor_work_handler);
+K_WORK_DEFINE(sensor_download_work, sensor_download_work_handler);
+
+static uint8_t toggle_sensor_value;
+static uint8_t sensor_download_value;
+
+// Function to process data from flash (used in read_data_cb)
+static void process_flash_data(uint8_t *data, size_t length);
+
+// Work handler for toggle_sensor
+void toggle_sensor_work_handler(struct k_work *work)
 {
-    LOG_INF("Toggling sensor to %d", val);
-
-    if (val) {
+    if (toggle_sensor_value) {
         // Wake up sensor
         ads1299_wakeup(ads1299_dev);
         LOG_INF("Sensor awakened");
@@ -74,26 +77,49 @@ static int toggle_sensor(uint8_t val)
         ads1299_standby(ads1299_dev);
         LOG_INF("Sensor put in standby");
 
-        // Stop recording
-        recording_active = false;
+        // End recording
+        end_recording();
     }
+}
 
+// Work handler for sensor_download_data
+void sensor_download_work_handler(struct k_work *work)
+{
+    // Read data from flash
+    DiskStatus status = disk_read_data(read_data_cb);
+    if (status != DISK_OK) {
+        LOG_ERR("Failed to read data from flash: %d", status);
+    }
+}
+
+// BLE callback functions
+static int toggle_sensor(uint8_t val)
+{
+    LOG_INF("Scheduling toggle_sensor to %d", val);
+    toggle_sensor_value = val;
+    k_work_submit(&toggle_sensor_work);
     return 0;
+}
+
+void read_data_cb(const uint8_t *data, size_t length)
+{
+    // Process data read from flash
+    process_flash_data((uint8_t *)data, length);
 }
 
 static int sensor_download_data(uint8_t val)
 {
-    if (val) {
-        LOG_INF("Initiating data download from flash");
-        download_data();
-    }
+
+    LOG_INF("Scheduling sensor data download: %d", val);
+    sensor_download_value = val;
+    k_work_submit(&sensor_download_work);
     return 0;
 }
 
 // BLE callback structure
 struct ble_cb cb = {
     .sensor_switch_cb = toggle_sensor,
-    .sensor_data_download_cb = sensor_download_data, // Implement if needed
+    .sensor_data_download_cb = sensor_download_data,
 };
 
 // Process raw data from ADS1299
@@ -119,66 +145,101 @@ static void process_data(uint8_t *data_buffer, int32_t *channel_data)
     // Further processing can be done here if needed
 }
 
-// Save data to flash buffer
-static void save_data_to_flash(uint8_t *data_buffer, size_t data_size)
+// Process data read from flash
+static void process_flash_data(uint8_t *data, size_t length)
 {
-    static uint8_t flash_buffer[FLASH_BUFFER_SIZE];
-    static size_t flash_buffer_index = 0;
+    uint8_t data_buffer[ADS1299_DATA_SIZE];
+    int32_t channel_data[ADS1299_NUM_CHANNELS];
+    int ble_buffer_index = 0;
 
-    // Copy data to flash buffer
-    memcpy(&flash_buffer[flash_buffer_index], data_buffer, data_size);
-    flash_buffer_index += data_size;
+    size_t data_points = length / ADS1299_DATA_SIZE;
+    int32_t ble_channel_buffers[ADS1299_NUM_CHANNELS][BLE_BUFFER_SIZE];
+    for (size_t i = 0; i < data_points; i++)
+    {
+        // Copy one data point from the data buffer
+        memcpy(data_buffer, &data[i * ADS1299_DATA_SIZE], ADS1299_DATA_SIZE);
 
-    // If flash buffer is full, write to flash
-    if (flash_buffer_index >= FLASH_BUFFER_SIZE) {
-        if (recording_active) {
-            DiskStatus status = disk_write_data(flash_buffer, flash_buffer_index);
-            if (status != DISK_OK) {
-                LOG_ERR("Failed to write data to flash: %d", status);
-            } else {
-                LOG_INF("Data written to flash: %u bytes", (unsigned int)flash_buffer_index);
+        // Process the raw data to get channel data
+        process_data(data_buffer, channel_data);
+
+        // Accumulate the channel data into BLE buffers
+        for (int ch = 0; ch < ADS1299_NUM_CHANNELS; ch++)
+        {
+            ble_channel_buffers[ch][ble_buffer_index] = channel_data[ch];
+        }
+
+        ble_buffer_index++;
+
+        // If the BLE buffer is full, send the data over BLE
+        if (ble_buffer_index >= BLE_BUFFER_SIZE)
+        {
+            // Stream data over BLE for each channel
+            for (int ch = 0; ch < ADS1299_NUM_CHANNELS; ch++)
+            {
+                int ret = stream_sensor_data(ch, ble_channel_buffers[ch], ble_buffer_index * sizeof(int32_t));
+                if (ret < 0)
+                {
+                    LOG_ERR("Failed to stream CHANNEL%d data: %d", ch + 1, ret);
+                }
+            }
+
+            // Reset BLE buffer index
+            ble_buffer_index = 0;
+        }
+    }
+
+    // After processing all data, send any remaining data
+    if (ble_buffer_index > 0)
+    {
+        // Stream the remaining data over BLE
+        for (int ch = 0; ch < ADS1299_NUM_CHANNELS; ch++)
+        {
+            int ret = stream_sensor_data(ch, ble_channel_buffers[ch], ble_buffer_index * sizeof(int32_t));
+            if (ret < 0)
+            {
+                LOG_ERR("Failed to stream CHANNEL%d data: %d", ch + 1, ret);
             }
         }
-        // Reset flash buffer index
-        flash_buffer_index = 0;
     }
 }
 
-// Callback function for disk_read_data()
-static void flash_data_callback(const uint8_t *data, size_t length)
-{
-    int32_t channel_data[ADS1299_NUM_CHANNELS];
-    for(int i = 0; i < length; i += ADS1299_DATA_SIZE) {
-        printk("Data: %x\n", data[i]);
-    }
-    process_data((uint8_t *)data, channel_data);
 
-    // Stream uncompressed data over BLE
-    for (int ch = 0; ch < ADS1299_NUM_CHANNELS; ch++) {
-        int ret = stream_sensor_data(ch, &channel_data[ch], sizeof(int32_t));
-        if (ret < 0) {
-            LOG_ERR("Failed to stream CHANNEL%d data: %d", ch + 1, ret);
+static void save_data_to_flash(uint8_t *data_buffer)
+{
+    // Copy data to flash buffer
+    memcpy(&flash_data_buffer[flash_buffer_batch_index * ADS1299_DATA_SIZE], data_buffer, ADS1299_DATA_SIZE);
+    flash_buffer_batch_index++;
+    if (flash_buffer_batch_index >= FLASH_BUFFER_BATCH_SIZE) {
+        // Write data to flash
+        DiskStatus status = disk_write_data(flash_data_buffer, sizeof(flash_data_buffer));
+        flash_buffer_batch_index = 0;
+        if (status != DISK_OK) {
+            LOG_ERR("Failed to write data to flash: %d", status);
         }
     }
 }
 
-// Download data from flash, process, and stream over BLE
-static void download_data(void)
+void end_recording(void)
 {
-    // Read data from flash using disk_read_data()
-    DiskStatus status = disk_read_data(flash_data_callback);
-
-    if (status != DISK_OK) {
-        LOG_ERR("Failed to read data from flash: %d", status);
-    } else {
-        LOG_INF("Data download complete");
+    // Write any remaining data to flash
+    if (flash_buffer_batch_index > 0) {
+        size_t remaining_size = flash_buffer_batch_index * ADS1299_DATA_SIZE;
+        DiskStatus status = disk_write_data(flash_data_buffer, remaining_size);
+        if (status != DISK_OK) {
+            LOG_ERR("Failed to write remaining data to flash: %d", status);
+        }
+        flash_buffer_batch_index = 0;
     }
+
+    // Stop recording
+    recording_active = false;
 }
 
 // Main data thread
 void data_thread(void)
 {
     LOG_INF("data_thread started. Thread ID: %p", k_current_get());
+    k_thread_name_set(k_current_get(), "DataThread");
     register_ble_cb(&cb);
 
     uint8_t data_buffer[ADS1299_DATA_SIZE];
@@ -197,12 +258,8 @@ void data_thread(void)
         return;
     }
 
-    // Variables for downsampling
-    uint32_t sample_counter = 0;
-
-    // BLE buffers for each channel
     int32_t ble_channel_buffers[ADS1299_NUM_CHANNELS][BLE_BUFFER_SIZE];
-    int ble_buffer_index = 0; // Common buffer index for all channels
+    int ble_buffer_index = 0;
 
     while (1) {
         // Read data from ADS1299 (controlled by semaphore)
@@ -212,16 +269,18 @@ void data_thread(void)
             // Process raw data
             process_data(data_buffer, channel_data);
 
-            // Save data to flash buffer
-            save_data_to_flash(data_buffer, ADS1299_DATA_SIZE);
+            // Save data to flash if recording is active
+            if (recording_active) {
+                save_data_to_flash(data_buffer);
+            }
 
-            // Handle BLE streaming
-            if (sample_counter % DOWNSAMPLE_FACTOR == 0) {
-                // Buffer downsampled data for BLE streaming
+            // Stream data over BLE
+            if (ble_stream_counter++ == BLE_STREAM_INTERVAL) {
+                ble_stream_counter = 0;
+
                 for (int ch = 0; ch < ADS1299_NUM_CHANNELS; ch++) {
                     ble_channel_buffers[ch][ble_buffer_index] = channel_data[ch];
                 }
-
                 ble_buffer_index++;
 
                 // If buffers are full, send data over BLE
@@ -238,16 +297,9 @@ void data_thread(void)
                     ble_buffer_index = 0;
                 }
             }
-
-            sample_counter++;
-
-        } else {
-            LOG_ERR("Error reading data: %d", err);
+            k_yield();
         }
-
-        // Optional: Yield to allow other threads to run
-        k_yield();
     }
 }
 
-// K_THREAD_DEFINE(data_thread_id, 4096*30, data_thread, NULL, NULL, NULL, PRIORITY, 0, 0);
+K_THREAD_DEFINE(data_thread_id, 4096 * 4, data_thread, NULL, NULL, NULL, PRIORITY, 0, 0);

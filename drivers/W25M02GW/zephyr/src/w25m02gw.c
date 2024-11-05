@@ -222,7 +222,7 @@ static int _write_enable(const struct device *dev)
         LOG_ERR("Error reading status register");
         return err;
     }
-    if(status_reg & BIT(1) == 0){
+    if((status_reg & BIT(1)) == 0){
         LOG_ERR("Write enable bit not set");
         return -1;
     }
@@ -296,6 +296,62 @@ static int _w25m02gw_load_program_data(const struct device *dev, uint16_t column
     }
     return 0;
 }
+
+// static int _w25m02gw_load_program_data(const struct device *dev, uint16_t column_addr, uint8_t *buffer, size_t buffer_size)
+// {
+//     int err;
+//     uint8_t tx_buffer[512 + 3]; // Maximum chunk size plus 3 bytes for command and address
+//     size_t offset = 0;
+//     const size_t PAGE_SIZE = 2048; // Define the page size
+
+//     while (offset < buffer_size) {
+//         // Wait until the device is ready and enable write operations
+//         err = _wait_until_ready(dev);
+//         if (err < 0) {
+//             LOG_ERR("Device not ready");
+//             return err;
+//         }
+
+//         err = _write_enable(dev);
+//         if (err < 0) {
+//             LOG_ERR("Write enable failed");
+//             return err;
+//         }
+
+//         // Calculate the current column address
+//         uint16_t current_column_addr = column_addr + offset;
+
+//         // Calculate how many bytes can be written without crossing a page boundary
+//         size_t bytes_remaining_in_buffer = buffer_size - offset;
+//         size_t bytes_remaining_in_page = PAGE_SIZE - (current_column_addr % PAGE_SIZE);
+//         size_t chunk_size = bytes_remaining_in_buffer;
+
+//         if (chunk_size > 512) {
+//             chunk_size = 512;
+//         }
+//         if (chunk_size > bytes_remaining_in_page) {
+//             chunk_size = bytes_remaining_in_page;
+//         }
+
+//         // Prepare the transmission buffer
+//         tx_buffer[0] = 0x02; // Write command
+//         _uint16to8(current_column_addr, &tx_buffer[1]); // Convert address to bytes
+//         memcpy(&tx_buffer[3], &buffer[offset], chunk_size); // Copy data chunk
+
+//         // Perform the SPI transaction
+//         err = w25m02gw_spi_transceive(dev, tx_buffer, chunk_size + 3, NULL, 0);
+//         if (err < 0) {
+//             LOG_ERR("Error loading program data at offset %zu", offset);
+//             return err;
+//         }
+
+//         // Move to the next chunk
+//         offset += chunk_size;
+//     }
+
+//     return 0;
+// }
+
 
 static int _page_data_read(const struct device *dev, uint16_t block_addr, uint8_t page_addr)
 {
@@ -413,15 +469,6 @@ static int init_w25m02gw(const struct device *dev)
         printk("Status Register %d: 0x%02x\n", i, status_reg[i]);
     }   
 
-    // //tester code
-    // uint8_t output[256];
-    // err = _w25m02gw_erase_block(dev, 0);
-    // err = _w25m02gw_read(dev, 0, 1, 0, output, sizeof(output));
-    // for(int i = 0; i < sizeof(output); i++)
-    // {
-    //     printk("Data[%d]: %x\n", i, output[i]);
-    //     k_msleep(1);
-    // }
 
     return err;
 

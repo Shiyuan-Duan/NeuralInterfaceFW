@@ -133,7 +133,7 @@ static int _ads1299_check_id(const struct device *dev, uint8_t *chip_id)
         LOG_ERR("Error reading chip ID\n");
         return err;
     }
-    LOG_INF("Chip ID: 0x%02x\n", *chip_id);
+    // LOG_INF("Chip ID: 0x%02x\n", *chip_id);
     return 0;
 }
 
@@ -283,8 +283,8 @@ static int turn_on_electrodes(const struct device *dev)
         uint8_t reg = 0x05 + i;
         uint8_t data = 0x00;
 
-        err = ads1299_read_reg(dev, reg, &data, 1);
-        LOG_ERR("Data first read from register 0x%02x: 0x%02x\n", reg, data);
+        // err = ads1299_read_reg(dev, reg, &data, 1);
+        // LOG_ERR("Data first read from register 0x%02x: 0x%02x\n", reg, data);
 
         data &= ~0x07; // Clear bits [0:2]
         err = ads1299_write_register(dev, reg, data);
@@ -294,8 +294,8 @@ static int turn_on_electrodes(const struct device *dev)
         }
 
 
-        err = ads1299_read_reg(dev, reg, &data, 1);
-        LOG_ERR("Data after read from register 0x%02x: 0x%02x\n", reg, data);
+        // err = ads1299_read_reg(dev, reg, &data, 1);
+        // LOG_ERR("Data after read from register 0x%02x: 0x%02x\n", reg, data);
 
 
     }
@@ -413,7 +413,7 @@ static int init_gpios(const struct device *dev)
         return err;
     }
 
-    LOG_INF("GPIOs initialized successfully\n");
+    // LOG_INF("GPIOs initialized successfully\n");
     return 0;
 }
 
@@ -469,7 +469,7 @@ static int init_ads1299(const struct device *dev)
     }
 
 
-    LOG_INF("ADS1299 driver initialized successfully\n");
+    // LOG_INF("ADS1299 driver initialized successfully\n");
 
     uint8_t srs_data = 0x00;
     err = ads1299_read_reg(dev, 0x01, &srs_data, 1);
@@ -479,12 +479,12 @@ static int init_ads1299(const struct device *dev)
 
 
     // check 0x05 - 0x0C register after reset
-    for (int i = 0x05; i <= 0x0C; i++)
-    {
-        uint8_t data = 0x00;
-        err = ads1299_read_reg(dev, i, &data, 1);
-        LOG_INF("Data read from register 0x%02x: 0x%02x\n", i, data);
-    }
+    // for (int i = 0x05; i <= 0x0C; i++)
+    // {
+    //     uint8_t data = 0x00;
+    //     err = ads1299_read_reg(dev, i, &data, 1);
+    //     LOG_INF("Data read from register 0x%02x: 0x%02x\n", i, data);
+    // }
 
     
     uint8_t config3 = 0x00;

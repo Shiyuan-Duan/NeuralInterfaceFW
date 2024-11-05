@@ -425,4 +425,4 @@ int ble_main(void)
 	return 0;
 }
 
-K_THREAD_DEFINE(ble_t, 4096, ble_main, NULL, NULL, NULL, PRIO, 0, 0);
+K_THREAD_DEFINE(ble_t, 4096*10, ble_main, NULL, NULL, NULL, PRIO, 0, 0);

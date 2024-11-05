@@ -19,6 +19,8 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/conn.h>
 
+#include <zephyr/kernel/thread.h>
+
 #include "ble.h"
 
 
@@ -54,7 +56,10 @@ void print_thread_info(const struct k_thread *thread, void *user_data)
 
 void main(void)
 {
+    // printk("Listing all threads:\n");
+    // k_thread_foreach(print_thread_info, NULL);
     printk("Listing all threads:\n");
     k_thread_foreach(print_thread_info, NULL);
+    thread_analyzer_print();
     cpu_load_init();
 }

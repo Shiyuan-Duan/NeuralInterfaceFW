@@ -39,8 +39,8 @@ DiskStatus disk_read_data(DataCallback callback);
 // Add an event marking to the recording
 DiskStatus disk_add_event(uint32_t time, uint16_t event_number);
 
-// Delete the recording
-DiskStatus disk_delete_recording(void);
+// Delete the recording (Might not need)
+// DiskStatus disk_delete_recording(void);
 
 // Get the size of the recording in bytes
 DiskStatus disk_get_recording_size(uint32_t *size);
