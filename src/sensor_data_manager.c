@@ -10,6 +10,7 @@
 #include "ads1299.h"
 #include "ble.h"
 #include "disk.h"
+#include "stream.h"
 
 #define PRIORITY 2
 
@@ -17,7 +18,7 @@
 #define BLE_STREAM_INTERVAL (ADS1299_SAMPLE_RATE / 250)
 
 #define FLASH_BUFFER_BATCH_SIZE 75
-#define BLE_BUFFER_SIZE 60
+#define BLE_BUFFER_SIZE 50
 #define ADS1299_NUM_CHANNELS 8
 #define ADS1299_DATA_SIZE 27
 
@@ -49,6 +50,9 @@ static void sensor_download_work_handler(struct k_work *work);
 
 K_WORK_DEFINE(toggle_sensor_work, toggle_sensor_work_handler);
 K_WORK_DEFINE(sensor_download_work, sensor_download_work_handler);
+
+
+
 
 static uint8_t toggle_sensor_value;
 static uint8_t sensor_download_value;
@@ -105,6 +109,7 @@ void read_data_cb(const uint8_t *data, size_t length)
 {
     // Process data read from flash
     process_flash_data((uint8_t *)data, length);
+
 }
 
 static int sensor_download_data(uint8_t val)
@@ -112,7 +117,8 @@ static int sensor_download_data(uint8_t val)
 
     LOG_INF("Scheduling sensor data download: %d", val);
     sensor_download_value = val;
-    k_work_submit(&sensor_download_work);
+    // k_work_submit(&sensor_download_work);
+    DiskStatus status = disk_read_data(read_data_cb);
     return 0;
 }
 
@@ -145,64 +151,37 @@ static void process_data(uint8_t *data_buffer, int32_t *channel_data)
     // Further processing can be done here if needed
 }
 
-// Process data read from flash
 static void process_flash_data(uint8_t *data, size_t length)
 {
     uint8_t data_buffer[ADS1299_DATA_SIZE];
     int32_t channel_data[ADS1299_NUM_CHANNELS];
-    int ble_buffer_index = 0;
 
     size_t data_points = length / ADS1299_DATA_SIZE;
-    int32_t ble_channel_buffers[ADS1299_NUM_CHANNELS][BLE_BUFFER_SIZE];
+
     for (size_t i = 0; i < data_points; i++)
     {
-        // Copy one data point from the data buffer
-        memcpy(data_buffer, &data[i * ADS1299_DATA_SIZE], ADS1299_DATA_SIZE);
+        // Extract and process data
 
-        // Process the raw data to get channel data
+        memcpy(data_buffer, &data[i * ADS1299_DATA_SIZE], ADS1299_DATA_SIZE);
         process_data(data_buffer, channel_data);
 
-        // Accumulate the channel data into BLE buffers
-        for (int ch = 0; ch < ADS1299_NUM_CHANNELS; ch++)
+        // Allocate memory for ble_stream_data from the slab
+        struct ble_stream_data *stream_data;
+        int ret = k_mem_slab_alloc(&ble_stream_slab, (void **)&stream_data, K_NO_WAIT);
+        if (ret != 0)
         {
-            ble_channel_buffers[ch][ble_buffer_index] = channel_data[ch];
+            LOG_ERR("Failed to allocate memory from slab err number %d, index %d", ret, i);
+            // Wait indefinitely until memory is available
+            ret = k_mem_slab_alloc(&ble_stream_slab, (void **)&stream_data, K_FOREVER);
+            LOG_WRN("Memory allocated from slab after waiting");
         }
+        // Copy channel data
+        memcpy(stream_data->channel_data, channel_data, sizeof(channel_data));
 
-        ble_buffer_index++;
-
-        // If the BLE buffer is full, send the data over BLE
-        if (ble_buffer_index >= BLE_BUFFER_SIZE)
-        {
-            // Stream data over BLE for each channel
-            for (int ch = 0; ch < ADS1299_NUM_CHANNELS; ch++)
-            {
-                int ret = stream_sensor_data(ch, ble_channel_buffers[ch], ble_buffer_index * sizeof(int32_t));
-                if (ret < 0)
-                {
-                    LOG_ERR("Failed to stream CHANNEL%d data: %d", ch + 1, ret);
-                }
-            }
-
-            // Reset BLE buffer index
-            ble_buffer_index = 0;
-        }
-    }
-
-    // After processing all data, send any remaining data
-    if (ble_buffer_index > 0)
-    {
-        // Stream the remaining data over BLE
-        for (int ch = 0; ch < ADS1299_NUM_CHANNELS; ch++)
-        {
-            int ret = stream_sensor_data(ch, ble_channel_buffers[ch], ble_buffer_index * sizeof(int32_t));
-            if (ret < 0)
-            {
-                LOG_ERR("Failed to stream CHANNEL%d data: %d", ch + 1, ret);
-            }
-        }
+        // Enqueue data
+        k_fifo_put(&ble_stream_fifo, stream_data);
     }
 }
-
 
 static void save_data_to_flash(uint8_t *data_buffer)
 {
