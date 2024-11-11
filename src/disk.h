@@ -1,6 +1,7 @@
 #ifndef DISK_H
 #define DISK_H
 
+#include <zephyr/types.h>
 #include <stdint.h>
 #include <stddef.h>
 
@@ -50,5 +51,7 @@ DiskStatus disk_get_recording_name(char *name_buffer, size_t buffer_length);
 
 // Get the list of event markings
 DiskStatus disk_get_events(EventMark *events_buffer, uint16_t *event_count);
+
+int disk_has_data(void);
 
 #endif // DISK_H

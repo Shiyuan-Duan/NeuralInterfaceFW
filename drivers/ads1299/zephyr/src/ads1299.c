@@ -160,6 +160,7 @@ static int _ads1299_start(const struct device *dev)
         LOG_ERR("Error sending START command\n");
         return err;
     }
+    // LOG_INF("Sent start command\n");
     return 0;
 }
 
@@ -181,7 +182,6 @@ static int _ads1299_read_data(const struct device *dev, uint8_t *read_buffer, ui
 
     /* Wait for the semaphore to be released by the DRDY interrupt */
     k_sem_take(&data->drdy_sem, K_FOREVER);
-
     /* Allocate a buffer of dummy bytes to send */
     uint8_t dummy_buffer[read_size];
     memset(dummy_buffer, 0x00, read_size);
@@ -259,6 +259,7 @@ static int _ads1299_wakeup(const struct device *dev)
         LOG_ERR("Error sending WAKEUP command\n");
         return err;
     }
+
     return 0;
 }
 

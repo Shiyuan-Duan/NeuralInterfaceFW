@@ -1,6 +1,3 @@
-
-
-// ble.c
 #include <zephyr/types.h>
 #include <stddef.h>
 #include <string.h>
@@ -18,23 +15,13 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/sys/reboot.h>
 
+#include "ble_sensor_control.h"
 #include "ble.h"
-#include "sensor_data_manager.h"
-#include "max86141.h"
-#include "state.h"
-
-// #define PRIO K_HIGHEST_APPLICATION_THREAD_PRIO + 1
 #define PRIO 7
 
-LOG_MODULE_REGISTER(BLE);
+LOG_MODULE_REGISTER(BLE_SENSOR_CONTROL);
 
-
-static bool sensor_state = false;
-
-
-
-// const SystemStatus* sys_stat_ptr; 
-
+/// @brief // Global variables
 static bool stream_sensor_channel1_enabled;
 static bool stream_sensor_channel2_enabled;
 static bool stream_sensor_channel3_enabled;
@@ -47,13 +34,29 @@ static bool stream_sensor_hr_enabled;
 static bool stream_sensor_spo2_enabled;
 static bool stream_sensor_temp_enabled;
 static bool stream_sensor_glucose_enabled;
-static bool is_streaming = false;
-static bool is_sensor_on = false;
 
-static char dbg_message[1024]="Hello world\n\0";
-static struct ble_cb cb;
+/// @brief // State Variables
+static bool _state_is_sensor_on = false;
+static bool _has_data = false;
+static uint8_t is_charging = 0;
+static uint8_t _state_battery_level = 0;
+static char _recording_name[32] = "NI_recording";
+static uint64_t _recording_start_time = 0;
+
+// LAST RECORDING
+static char _last_recording_name[32] = "NI_recording";
+static uint64_t _last_recording_start_time = 0;
+static uint32_t _last_recording_size = 0;
 
 
+
+
+
+/// @brief // Global Callbacks
+static struct ble_sensor_ctrl_cb cb;
+
+/// @brief // Attribute Callbacks
+// #region Attribute Callbacks
 
 static void ble_ccc_stream_channel1_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
@@ -105,10 +108,7 @@ static void ble_ccc_stream_glucose_cfg_changed(const struct bt_gatt_attr *attr, 
 }
 
 
-
-
-
-static ssize_t write_sensor_sw(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+static ssize_t attr_cb_write_sensor_sw(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
 	if (len != 1) {
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
@@ -121,25 +121,25 @@ static ssize_t write_sensor_sw(struct bt_conn *conn, const struct bt_gatt_attr *
 	}else{
 		cb.sensor_switch_cb(0);
 	}
-	is_sensor_on = value;
+	_state_is_sensor_on = value;
 
 
 
 	return len;
 }
-static ssize_t read_sensor_sw(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
-    uint8_t sensor_sw_value = is_sensor_on; 
-	// if(fw_get_state() == STATE_OPERATING){
-	// 	sensor_sw_value = 1;
-	// }else{
-	// 	sensor_sw_value = 0;
-	// }
-
+static ssize_t attr_cb_read_sensor_sw(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
+    uint8_t sensor_sw_value = _state_is_sensor_on; 
 
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &sensor_sw_value, sizeof(sensor_sw_value));
 }
 
-static ssize_t write_sensor_data_download_sw(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+static ssize_t attr_cb_read_battery_level(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
+	uint8_t battery_level = _state_battery_level; 
+
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, &battery_level, sizeof(battery_level));
+}
+
+static ssize_t attr_cb_write_sensor_data_download_sw(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
 	if (len != 1) {
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
@@ -156,7 +156,7 @@ static ssize_t write_sensor_data_download_sw(struct bt_conn *conn, const struct 
 	return len;
 }
 
-static ssize_t bt_write_reset(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+static ssize_t attr_cb_bt_write_reset(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
 	if (len != 1) {
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
@@ -172,31 +172,61 @@ static ssize_t bt_write_reset(struct bt_conn *conn, const struct bt_gatt_attr *a
 	return len;
 }
 
-
-static ssize_t write_sensor_stream_sw(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+static ssize_t attr_cb_read_recording_name(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, _recording_name, sizeof(_recording_name));
+}
+static ssize_t attr_cb_bt_write_reset_recording_name(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
-	if (len != 1) {
-		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
-	}
 
-	uint8_t value = *((uint8_t *)buf);
-
-	is_streaming = value;
-
-
+	memcpy(_recording_name, buf, MIN(len, 32));
+	_recording_name[len] = '\0';
 
 	return len;
 }
 
-static ssize_t read_sensor_stream_sw(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
-    // bool is_streaming;
-	// is_streaming = fw_get_is_streaming();
-	bool _is_streaming = is_streaming;
+static ssize_t attr_cb_read_recording_start_time(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, &_recording_start_time, sizeof(_recording_start_time));
+}
+static ssize_t attr_cb_bt_write_reset_recording_start_time(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+{
 
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, &_is_streaming, sizeof(_is_streaming));
+	if(len > 8){
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
+	memcpy(&_recording_start_time, buf, len); 
+
+	return len;
 }
 
+static ssize_t attr_cb_bt_add_event(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+{
+	if (len >= 2) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+	}
 
+	uint16_t value = *((uint16_t *)buf);
+
+	cb.sensor_add_event_cb(value);
+
+	return len;
+}
+
+static ssize_t attr_cb_read_last_recording_name(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, _last_recording_name, sizeof(_last_recording_name));
+}
+static ssize_t attr_cb_read_last_recording_start_time(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, &_last_recording_start_time, sizeof(_last_recording_start_time));
+}
+static ssize_t attr_cb_read_last_recording_size(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
+	
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, &_last_recording_size, sizeof(_last_recording_size));
+}
+
+// #endregion
+
+
+/// @brief // BLE Attribute table declaration
+// #region Attribute Table
 BT_GATT_SERVICE_DEFINE(
 	exg_service,
 	BT_GATT_PRIMARY_SERVICE(BT_UUID),
@@ -250,61 +280,23 @@ BT_GATT_SERVICE_DEFINE(
 	BT_GATT_CCC(ble_ccc_stream_glucose_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
 
-	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_SW, BT_GATT_CHRC_WRITE|BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE|BT_GATT_PERM_READ, read_sensor_sw, write_sensor_sw, &is_sensor_on),
-	BT_GATT_CHARACTERISTIC(BT_UUID_RESET, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_write_reset, NULL),
-	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_STREAM_SW, BT_GATT_CHRC_WRITE|BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE|BT_GATT_PERM_READ, read_sensor_stream_sw, write_sensor_stream_sw, &is_streaming),
-	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_DOWNLOAD_DATA_SW, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, write_sensor_data_download_sw, NULL),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_SW, BT_GATT_CHRC_WRITE|BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE|BT_GATT_PERM_READ, attr_cb_read_sensor_sw, attr_cb_write_sensor_sw, &_state_is_sensor_on),
+	BT_GATT_CHARACTERISTIC(BT_UUID_RESET, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, attr_cb_bt_write_reset, NULL),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_STREAM_SW, BT_GATT_CHRC_WRITE|BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE|BT_GATT_PERM_READ, NULL, NULL, NULL), // Not used, consider changing to other state manager.
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_DOWNLOAD_DATA_SW, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, attr_cb_write_sensor_data_download_sw, NULL),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_BATTERY_LEVEL, BT_GATT_CHRC_READ, BT_GATT_PERM_READ, attr_cb_read_battery_level, NULL, &_state_battery_level),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_RECORDING_START_TIME, BT_GATT_CHRC_READ|BT_GATT_CHRC_WRITE, BT_GATT_PERM_READ|BT_GATT_PERM_WRITE, attr_cb_read_recording_start_time, attr_cb_bt_write_reset_recording_start_time, &_recording_start_time),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_NEW_RECORDING_NAME, BT_GATT_CHRC_READ|BT_GATT_CHRC_WRITE, BT_GATT_PERM_READ|BT_GATT_PERM_WRITE, attr_cb_read_recording_name, attr_cb_bt_write_reset_recording_name, &_recording_name),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_ADD_EVENT, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, attr_cb_bt_add_event, NULL),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_LAST_RECORDING_NAME, BT_GATT_CHRC_READ, BT_GATT_PERM_READ, attr_cb_read_last_recording_name, NULL, &_last_recording_name),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_LAST_RECORDING_START_TIME, BT_GATT_CHRC_READ, BT_GATT_PERM_READ, attr_cb_read_last_recording_start_time, NULL, &_last_recording_start_time),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_LAST_RECORDING_SIZE, BT_GATT_CHRC_READ, BT_GATT_PERM_READ, attr_cb_read_last_recording_size, NULL, &_last_recording_size),
 );
 
-int init_ble_service(struct ble_cb *callbacks){
-	cb.sensor_data_download_cb = callbacks->sensor_data_download_cb;
-	cb.sensor_switch_cb = callbacks->sensor_switch_cb;
-	return 0;
-}
 
-static struct bt_le_adv_param *adv_param = BT_LE_ADV_PARAM(
-	(BT_LE_ADV_OPT_CONNECTABLE |
-	 BT_LE_ADV_OPT_USE_IDENTITY), /* Connectable advertising and use identity address */
-        BT_GAP_ADV_SLOW_INT_MIN,
-        BT_GAP_ADV_SLOW_INT_MAX,
-	NULL); /* Set to NULL for undirected advertising */
+// #endregion
 
-static const struct bt_data ad[] = {
-	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
-
-};
-
-static const struct bt_data sd[] = {
-	BT_DATA_BYTES(BT_DATA_UUID128_ALL, BT_UUID_VAL),
-};
-
-static void on_connected(struct bt_conn *conn, uint8_t err)
-{
-	if (err) {
-		printk("Connection failed (err %u)\n", err);
-		return;
-	}
-
-	printk("Connected\n");
-	ssize_t mtu = bt_gatt_get_mtu(conn);
-	printk("MTU: %d\n", mtu);
-
-
-}
-
-static void on_disconnected(struct bt_conn *conn, uint8_t reason)
-{
-	printk("Disconnected (reason %u)\n", reason);
-
-
-}
-struct bt_conn_cb connection_callbacks = {
-	.connected = on_connected,
-	.disconnected = on_disconnected,
-};
-
-
+/// @brief // BLE Control Function Implementation
 int stream_sensor_data(enum SensorType sensor_type, uint32_t *sensor_value, ssize_t size)
 {
 	struct bt_gatt_attr *attr;
@@ -389,40 +381,66 @@ int stream_sensor_data(enum SensorType sensor_type, uint32_t *sensor_value, ssiz
 	return bt_gatt_notify(NULL, attr, sensor_value, size);
 }
 
-
-
-int register_ble_cb(struct ble_cb *callbacks){
-	cb.sensor_switch_cb = callbacks->sensor_switch_cb;
-	cb.sensor_data_download_cb = callbacks->sensor_data_download_cb;
-	return 0;
+int register_ble_cb(struct ble_sensor_ctrl_cb *callbacks){
+    cb.sensor_switch_cb = callbacks->sensor_switch_cb;
+    cb.sensor_data_download_cb = callbacks->sensor_data_download_cb;
+	cb.sensor_add_event_cb = callbacks->sensor_add_event_cb;
+    return 0;
 };
 
-int ble_main(void)
-{	
-
-	int err;
-	// fw_initialize_system_status();
-	// sys_stat_ptr = fw_get_system_status();
-	init_ble_service(&cb);
-	err = bt_enable(NULL);
-	if (err) {
-		LOG_ERR("Bluetooth init failed (err %d)\n", err);
-		return -1;
-	}
-
-	bt_conn_cb_register(&connection_callbacks);
-
-	LOG_INF("Bluetooth initialized\n");
-	err = bt_le_adv_start(adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-	if (err) {
-		LOG_ERR("Advertising failed to start (err %d)\n", err);
-		return -1;
-	}
-
-	// stream_sensor_data(1);
-
-	LOG_INF("Advertising successfully started with prioirty: %d\n", PRIO);
+int state_set_battery_level(uint8_t level){
+	_state_battery_level = level;
+	LOG_INF("Battery level is set to %d", level);
 	return 0;
 }
 
-K_THREAD_DEFINE(ble_t, 4096*10, ble_main, NULL, NULL, NULL, PRIO, 0, 0);
+int state_get_battery_level(void){
+	return _state_battery_level;
+}
+
+int state_set_has_data(int has_data){
+	_has_data = has_data;
+	return 0;
+}
+
+int state_get_has_data(void){
+	return _has_data;
+}
+
+int state_set_is_charging(uint8_t is_charging){
+	is_charging = is_charging;
+	return 0;
+}
+
+int state_get_is_charging(void){
+	return is_charging;
+}
+
+int state_set_last_recording_name(char *name){
+	memcpy(_last_recording_name, name, strlen(name));
+	return 0;
+}
+
+int state_get_last_recording_name(char *name){
+	memcpy(name, _last_recording_name, strlen(_last_recording_name));
+	return 0;
+}
+
+int state_set_last_recording_start_time(uint64_t start_time){
+	_last_recording_start_time = start_time;
+	return 0;
+}
+
+uint64_t state_get_last_recording_start_time(void){
+	return _last_recording_start_time;
+}
+
+int state_set_last_recording_size(uint32_t size){
+	_last_recording_size = size;
+	return 0;
+}
+
+uint32_t state_get_last_recording_size(void){
+	return _last_recording_size;
+}
+

@@ -8,11 +8,11 @@
 #include <zephyr/sys/util.h>
 
 #include "ads1299.h"
-#include "ble.h"
+#include "ble_sensor_control.h"
 #include "disk.h"
 #include "stream.h"
 
-#define PRIORITY 2
+#define PRIORITY -1
 
 #define ADS1299_SAMPLE_RATE CONFIG_ADS1299_SAMPLE_RATE
 #define BLE_STREAM_INTERVAL (ADS1299_SAMPLE_RATE / 250)
@@ -34,14 +34,15 @@ int ble_stream_counter = 0;
 static uint8_t flash_data_buffer[2048] = {0};
 static uint8_t flash_buffer_batch_index = 0;
 
+static uint32_t data_counter = 0;
 // Read buffer
-static uint8_t read_buffer[2048];
+
 
 // Forward declarations
 static void process_data(uint8_t *data_buffer, int32_t *channel_data);
 static void save_data_to_flash(uint8_t *data_buffer);
 static void read_data_cb(const uint8_t *data, size_t length);
-static void download_data(void);
+
 void end_recording(void);
 
 // Work items for offloading heavy processing
@@ -70,6 +71,7 @@ void toggle_sensor_work_handler(struct k_work *work)
 
         // Start a new recording with default name
         DiskStatus status = disk_start_recording("NI_recording");
+        data_counter = 0;
         if (status != DISK_OK) {
             LOG_ERR("Failed to start recording: %d", status);
         } else {
@@ -83,6 +85,7 @@ void toggle_sensor_work_handler(struct k_work *work)
 
         // End recording
         end_recording();
+        data_counter = 0;
     }
 }
 
@@ -101,6 +104,7 @@ static int toggle_sensor(uint8_t val)
 {
     LOG_INF("Scheduling toggle_sensor to %d", val);
     toggle_sensor_value = val;
+    data_counter = 0;
     k_work_submit(&toggle_sensor_work);
     return 0;
 }
@@ -121,11 +125,22 @@ static int sensor_download_data(uint8_t val)
     DiskStatus status = disk_read_data(read_data_cb);
     return 0;
 }
+static int sensor_add_event(uint16_t event_number)
+{
+    // Add event marking to the recording
+    DiskStatus status = disk_add_event(data_counter, event_number);
 
+    if (status != DISK_OK) {
+        LOG_ERR("Failed to add event marking: %d", status);
+        return -1;
+    }
+    return 0;
+}
 // BLE callback structure
-struct ble_cb cb = {
+struct ble_sensor_ctrl_cb cb = {
     .sensor_switch_cb = toggle_sensor,
     .sensor_data_download_cb = sensor_download_data,
+    .sensor_add_event_cb = sensor_add_event,
 };
 
 // Process raw data from ADS1299
@@ -167,14 +182,7 @@ static void process_flash_data(uint8_t *data, size_t length)
 
         // Allocate memory for ble_stream_data from the slab
         struct ble_stream_data *stream_data;
-        int ret = k_mem_slab_alloc(&ble_stream_slab, (void **)&stream_data, K_NO_WAIT);
-        if (ret != 0)
-        {
-            LOG_ERR("Failed to allocate memory from slab err number %d, index %d", ret, i);
-            // Wait indefinitely until memory is available
-            ret = k_mem_slab_alloc(&ble_stream_slab, (void **)&stream_data, K_FOREVER);
-            LOG_WRN("Memory allocated from slab after waiting");
-        }
+        int ret = k_mem_slab_alloc(&ble_stream_slab, (void **)&stream_data, K_FOREVER);
         // Copy channel data
         memcpy(stream_data->channel_data, channel_data, sizeof(channel_data));
 
@@ -220,7 +228,6 @@ void data_thread(void)
     LOG_INF("data_thread started. Thread ID: %p", k_current_get());
     k_thread_name_set(k_current_get(), "DataThread");
     register_ble_cb(&cb);
-
     uint8_t data_buffer[ADS1299_DATA_SIZE];
     int32_t channel_data[ADS1299_NUM_CHANNELS];
     int err;
@@ -246,6 +253,7 @@ void data_thread(void)
 
         if (err == 0) {
             // Process raw data
+            data_counter++;
             process_data(data_buffer, channel_data);
 
             // Save data to flash if recording is active

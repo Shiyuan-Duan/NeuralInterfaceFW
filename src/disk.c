@@ -5,7 +5,7 @@
 #include <string.h>
 #include <zephyr/logging/log.h>
 #include "w25m02gw.h"
-
+#include "ble_sensor_control.h"
 // Device instance
 
 
@@ -27,10 +27,11 @@ LOG_MODULE_REGISTER(DISK, LOG_LEVEL_INF);
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 
-#define METADATA_SIGNATURE 0xDEADBEEF
+#define METADATA_SIGNATURE 0xBEADBEEF
 
 
 typedef struct {
+    uint64_t start_time;          // Time of the event
     uint32_t signature;                    // Unique identifier
     char name[RECORDING_NAME_MAX_LENGTH];  // Recording name
     uint32_t size;                         // Size in bytes
@@ -69,6 +70,7 @@ DiskStatus disk_init(void) {
 
 DiskStatus disk_start_recording(const char *name) {
     // Initialize metadata
+    printk("Before starting disk has %d bytes of data\n", metadata.size);
     LOG_INF("Starting new recording: %s", name);
     memset(&metadata, 0, sizeof(DiskMetadata));
     LOG_INF("1");
@@ -190,6 +192,7 @@ DiskStatus disk_add_event(uint32_t time, uint16_t event_number) {
         printk("Event list is full\n");
         return DISK_ERR_METADATA_INVALID;
     }
+    LOG_INF("Attempting to add event: %d at time: %d", event_number, time);
     metadata.events[metadata.event_count].time = time;
     metadata.events[metadata.event_count].event_number = event_number;
     metadata.event_count++;
@@ -199,6 +202,8 @@ DiskStatus disk_add_event(uint32_t time, uint16_t event_number) {
     if (status != DISK_OK) {
         return status;
     }
+
+    LOG_INF("Successfully added event: %d at time: %d", event_number, time);
 
     return DISK_OK;
 }
@@ -264,7 +269,10 @@ static DiskStatus load_metadata(void) {
         LOG_INF("Initialized new metadata \n");
         return DISK_OK;
     }
-
+    printk("Loaded metadata: %s, %d, %d\n", metadata.name, metadata.size, metadata.start_time);
+    state_set_last_recording_name(metadata.name);
+    state_set_last_recording_size(metadata.size);
+    state_set_last_recording_start_time(metadata.start_time);
     return DISK_OK;
 }
 
@@ -294,6 +302,10 @@ static DiskStatus save_metadata(void) {
         return DISK_ERR_UNKNOWN;
     }
 
+    state_set_last_recording_name(metadata.name);
+    state_set_last_recording_size(metadata.size);
+    state_set_last_recording_start_time(metadata.start_time);
+
 
     return DISK_OK;
 }
@@ -312,3 +324,8 @@ static DiskStatus erase_data_blocks(void) {
     return DISK_OK;
 }
 
+
+int disk_has_data(void) {
+    load_metadata();
+    return metadata.signature == METADATA_SIGNATURE;
+}

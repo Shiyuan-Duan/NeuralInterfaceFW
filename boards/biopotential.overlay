@@ -1,9 +1,40 @@
-&i2c0 {	status = "disabled";};
+/ {
+    zephyr,user {
+        io-channels = <&adc 0>;
+    };
 
+	batt_mon_en: batt_mon_en {
+		compatible = "power-switch";
+        status = "okay";
+		gpios= <&gpio1 6 GPIO_ACTIVE_HIGH>;
+	};
+
+
+};
+
+
+&adc {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1_6";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,input-positive = <NRF_SAADC_AIN2>; /* P0.02 for nRF52xx, P0.04 for nRF5340 */
+		zephyr,resolution = <12>;
+	};
+};
+
+
+&i2c0 {	status = "disabled";};
 &i2c1 {	status = "disabled";};
 &gpio1{
 	status = "okay";
 };
+
+
 	
 &spi1 {
     compatible = "nordic,nrf-spim";
