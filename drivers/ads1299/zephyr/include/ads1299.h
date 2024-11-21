@@ -1,5 +1,5 @@
-#ifndef MAX30003_H_
-#define MAX30003_H_
+#ifndef ADS1299_H_
+#define ADS1299_H_
 
 #define DT_DRV_COMPAT ti_ads1299
 #include <zephyr/device.h>

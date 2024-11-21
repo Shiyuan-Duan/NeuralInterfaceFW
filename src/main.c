@@ -26,7 +26,7 @@
 
 #include <debug/cpu_load.h>
 #include <arm_math.h>
-#include <max86141.h>
+
 
 LOG_MODULE_REGISTER(MAXBLE, LOG_LEVEL_INF);
 
@@ -58,8 +58,8 @@ void main(void)
 {
     // printk("Listing all threads:\n");
     // k_thread_foreach(print_thread_info, NULL);
-    printk("Listing all threads:\n");
-    k_thread_foreach(print_thread_info, NULL);
-    thread_analyzer_print();
+    // printk("Listing all threads:\n");
+    // k_thread_foreach(print_thread_info, NULL);
+    // thread_analyzer_print();
     cpu_load_init();
 }
