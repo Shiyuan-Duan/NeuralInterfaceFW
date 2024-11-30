@@ -36,7 +36,7 @@ static bool stream_sensor_temp_enabled;
 static bool stream_sensor_glucose_enabled;
 
 /// @brief // State Variables
-static bool _state_is_sensor_on = false;
+static uint8_t _state_is_sensor_on = 0;
 static bool _has_data = false;
 static uint8_t is_charging = 0;
 static uint8_t _state_battery_level = 0;
@@ -47,6 +47,10 @@ static uint64_t _recording_start_time = 0;
 static char _last_recording_name[32] = "NI_recording";
 static uint64_t _last_recording_start_time = 0;
 static uint32_t _last_recording_size = 0;
+
+static uint8_t _ads1299_data[128] = {0};
+
+static size_t sensor_fifo_size = 0;
 
 
 
@@ -114,13 +118,20 @@ static ssize_t attr_cb_write_sensor_sw(struct bt_conn *conn, const struct bt_gat
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 	}
 
-	uint8_t value = *((uint8_t *)buf);
+	uint8_t value;
+	memcpy(&value, buf, sizeof(uint8_t));
 
 	if(value == 1){
-		cb.sensor_switch_cb(1);
+		printk("Sensor is turning on\n");
+		printk("Is sensor switch cb registered? %d\n", cb.sensor_switch_cb != NULL);
+		printk("Sensor switch cb address: %p\n", cb.sensor_switch_cb);
+		cb.sensor_switch_cb(value);
+
+		printk("Did I get to here?\n");
 	}else{
-		cb.sensor_switch_cb(0);
+		cb.sensor_switch_cb(value);
 	}
+
 	_state_is_sensor_on = value;
 
 
@@ -222,6 +233,19 @@ static ssize_t attr_cb_read_last_recording_size(struct bt_conn *conn, const stru
 	return bt_gatt_attr_read(conn, attr, buf, len, offset, &_last_recording_size, sizeof(_last_recording_size));
 }
 
+static ssize_t attr_cb_read_data(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
+	printk("Trying to call cb\n");
+	cb.sensor_read_data_cb(_ads1299_data);
+	printk("Triggered cb\n");
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, _ads1299_data, sizeof(_ads1299_data));
+}
+
+static ssize_t attr_cb_read_fifo_size(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset) {
+	size_t fifo_size = cb.sensor_read_fifo_size_cb(); 
+
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, &fifo_size, sizeof(fifo_size));
+}
+
 // #endregion
 
 
@@ -291,6 +315,8 @@ BT_GATT_SERVICE_DEFINE(
 	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_LAST_RECORDING_NAME, BT_GATT_CHRC_READ, BT_GATT_PERM_READ, attr_cb_read_last_recording_name, NULL, &_last_recording_name),
 	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_LAST_RECORDING_START_TIME, BT_GATT_CHRC_READ, BT_GATT_PERM_READ, attr_cb_read_last_recording_start_time, NULL, &_last_recording_start_time),
 	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_LAST_RECORDING_SIZE, BT_GATT_CHRC_READ, BT_GATT_PERM_READ, attr_cb_read_last_recording_size, NULL, &_last_recording_size),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_READ_DATA, BT_GATT_CHRC_READ, BT_GATT_PERM_READ, attr_cb_read_data, NULL, _ads1299_data),
+	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_FLASH_FIFO_SIZE, BT_GATT_CHRC_READ, BT_GATT_PERM_READ, attr_cb_read_fifo_size, NULL, &sensor_fifo_size),
 );
 
 
@@ -385,6 +411,8 @@ int register_ble_cb(struct ble_sensor_ctrl_cb *callbacks){
     cb.sensor_switch_cb = callbacks->sensor_switch_cb;
     cb.sensor_data_download_cb = callbacks->sensor_data_download_cb;
 	cb.sensor_add_event_cb = callbacks->sensor_add_event_cb;
+	cb.sensor_read_data_cb = callbacks->sensor_read_data_cb;
+	cb.sensor_read_fifo_size_cb = callbacks->sensor_read_fifo_size_cb;
     return 0;
 };
 
